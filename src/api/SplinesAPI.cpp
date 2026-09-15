@@ -154,6 +154,11 @@ PYBIND11_MODULE( splines, m )
             nsd.geometryControlPoints() );
     };
 
+    const auto spatial_hdiv_second_derivatives = []( const api::NavierStokesDiscretization& nsd ) {
+        return evaluateSpatialHDivBasisSecondDerivatives(
+            nsd.getHDIV(), nsd.getGeometry(), nsd.geometryControlPoints() );
+    };
+
     const auto spatial_l2_basis = []( const api::NavierStokesDiscretization& nsd ) {
         return evaluateSpatialL2BasisValues(
             nsd.getL2(),
@@ -204,6 +209,83 @@ PYBIND11_MODULE( splines, m )
                 return out;
             },
             "A list of all the elements in the discretization." )
+        // traction_jump
+        .def(
+            "interiorEdgeSegments",
+            []( const api::NavierStokesDiscretization& nsd ) {
+                const param::ParametricAtlas& atlas =
+                    nsd.getH1().splineSpace().basisComplex().parametricAtlas();
+
+                std::vector<topology::Face> elements;
+                iterateCellsWhile( atlas.cmap(), 2, [&elements]( const topology::Face& f ) {
+                    elements.push_back( f );
+                    return true;
+                } );
+
+                py::list segments;
+                constexpr double tol = 1e-12;
+                for( size_t i = 0; i < elements.size(); i++ )
+                {
+                    const Eigen::Vector2d first_start = atlas.parametricStarts( elements.at( i ) ).head<2>();
+                    const Eigen::Vector2d first_length = atlas.parametricLengths( elements.at( i ) ).head<2>();
+                    const Eigen::Vector2d first_stop = first_start + first_length;
+
+                    for( size_t j = i + 1; j < elements.size(); j++ )
+                    {
+                        const Eigen::Vector2d second_start = atlas.parametricStarts( elements.at( j ) ).head<2>();
+                        const Eigen::Vector2d second_length = atlas.parametricLengths( elements.at( j ) ).head<2>();
+                        const Eigen::Vector2d second_stop = second_start + second_length;
+
+                        for( size_t normal_axis = 0; normal_axis < 2; normal_axis++ )
+                        {
+                            const size_t tangent_axis = 1 - normal_axis;
+                            const bool first_is_lower =
+                                std::abs( first_stop( normal_axis ) - second_start( normal_axis ) ) < tol;
+                            const bool second_is_lower =
+                                std::abs( second_stop( normal_axis ) - first_start( normal_axis ) ) < tol;
+                            if( not first_is_lower and not second_is_lower ) continue;
+
+                            const double overlap_start =
+                                std::max( first_start( tangent_axis ), second_start( tangent_axis ) );
+                            const double overlap_stop =
+                                std::min( first_stop( tangent_axis ), second_stop( tangent_axis ) );
+                            if( overlap_stop - overlap_start <= tol ) continue;
+
+                            const topology::Face& lower = first_is_lower ? elements.at( i ) : elements.at( j );
+                            const topology::Face& upper = first_is_lower ? elements.at( j ) : elements.at( i );
+                            const Eigen::Vector2d& lower_start = first_is_lower ? first_start : second_start;
+                            const Eigen::Vector2d& lower_length = first_is_lower ? first_length : second_length;
+                            const Eigen::Vector2d& upper_start = first_is_lower ? second_start : first_start;
+                            const Eigen::Vector2d& upper_length = first_is_lower ? second_length : first_length;
+
+                            Eigen::Vector2d lower_point_start = Eigen::Vector2d::Zero();
+                            Eigen::Vector2d lower_point_stop = Eigen::Vector2d::Zero();
+                            Eigen::Vector2d upper_point_start = Eigen::Vector2d::Zero();
+                            Eigen::Vector2d upper_point_stop = Eigen::Vector2d::Zero();
+                            lower_point_start( normal_axis ) = lower_point_stop( normal_axis ) = 1.0;
+                            lower_point_start( tangent_axis ) =
+                                ( overlap_start - lower_start( tangent_axis ) ) / lower_length( tangent_axis );
+                            lower_point_stop( tangent_axis ) =
+                                ( overlap_stop - lower_start( tangent_axis ) ) / lower_length( tangent_axis );
+                            upper_point_start( tangent_axis ) =
+                                ( overlap_start - upper_start( tangent_axis ) ) / upper_length( tangent_axis );
+                            upper_point_stop( tangent_axis ) =
+                                ( overlap_stop - upper_start( tangent_axis ) ) / upper_length( tangent_axis );
+
+                            py::dict segment;
+                            segment["first"] = lower;
+                            segment["second"] = upper;
+                            segment["first_start"] = lower_point_start;
+                            segment["first_end"] = lower_point_stop;
+                            segment["second_start"] = upper_point_start;
+                            segment["second_end"] = upper_point_stop;
+                            segments.append( segment );
+                        }
+                    }
+                }
+                return segments;
+            },
+            "Returns every active interior edge segment, its two elements, and its element-local endpoints." )
         .def(
             "localizeElement",
             []( api::NavierStokesDiscretization& nsd, const topology::Face& elem ) {
@@ -274,6 +356,15 @@ PYBIND11_MODULE( splines, m )
             "piolaTransformedHDIVFirstDerivatives",
             spatial_hdiv_derivatives,
             "Compatibility alias for evaluateSpatialHDivBasisFirstDerivatives." )
+        .def(
+            "evaluateSpatialHDivBasisSecondDerivatives",
+            spatial_hdiv_second_derivatives,
+            "Evaluates exact second spatial derivatives of the 2D H(div) basis. Columns are ordered as "
+            "d2v_x/dx2, d2v_y/dx2, d2v_x/dxdy, d2v_y/dxdy, d2v_x/dy2, d2v_y/dy2." )
+        .def(
+            "piolaTransformedHDIVSecondDerivatives",
+            spatial_hdiv_second_derivatives,
+            "Compatibility alias for evaluateSpatialHDivBasisSecondDerivatives." )
         .def(
             "evaluateSpatialL2BasisValues",
             spatial_l2_basis,
@@ -574,6 +665,98 @@ PYBIND11_MODULE( splines, m )
             "A list of all HDIV functions which are nonzero on and perpendicular to a given side of the discretization "
             "spline patch",
             "side"_a );
+
+    py::class_<api::NURBSNavierStokesHierarchicalDiscretization, api::NavierStokesHierarchicalDiscretization>(
+        m, "NURBSNavierStokesHierarchicalDiscretization" )
+        .def( py::init<const basis::KnotVector&,
+                       const basis::KnotVector&,
+                       const size_t,
+                       const size_t,
+                       const Eigen::MatrixXd&,
+                       const Eigen::VectorXd&,
+                       const std::vector<std::vector<std::pair<size_t, size_t>>>>(),
+              "Create a hierarchical Navier-Stokes discretization with rational NURBS geometry. The analysis spaces "
+              "remain polynomial; geometry is evaluated with homogeneous NURBS control points built from the "
+              "Euclidean control points and weights.",
+              "knot_vec_s"_a,
+              "knot_vec_t"_a,
+              "degree_s"_a,
+              "degree_t"_a,
+              "control_points"_a,
+              "weights"_a,
+              "elems_to_refine"_a )
+        .def( py::init<const basis::KnotVector&,
+                       const basis::KnotVector&,
+                       const size_t,
+                       const size_t,
+                       const Eigen::MatrixXd&,
+                       const std::vector<std::vector<std::pair<size_t, size_t>>>>(),
+              "Create a hierarchical Navier-Stokes discretization with rational NURBS geometry using homogeneous "
+              "control points.",
+              "knot_vec_s"_a,
+              "knot_vec_t"_a,
+              "degree_s"_a,
+              "degree_t"_a,
+              "homogeneous_control_points"_a,
+              "elems_to_refine"_a )
+        .def_property_readonly( "weights",
+                                &api::NURBSNavierStokesHierarchicalDiscretization::weights,
+                                "The rational geometry weights." );
+
+    py::class_<api::AdaptiveLocalNavierStokesHierarchicalDiscretization, api::NavierStokesHierarchicalDiscretization>(
+        m, "AdaptiveLocalNavierStokesHierarchicalDiscretization" )
+        .def( py::init<const basis::KnotVector&,
+                       const basis::KnotVector&,
+                       const size_t,
+                       const size_t,
+                       const Eigen::MatrixXd&,
+                       const std::vector<std::vector<std::pair<size_t, size_t>>>>(),
+              "Create a hierarchical Navier-Stokes discretization for the adaptive local refinement path. The marked "
+              "cells are expected to come from a fixed parametric adaptive selector on the Python side. This class "
+              "currently reuses the compatible hierarchical backend.",
+              "knot_vec_s"_a,
+              "knot_vec_t"_a,
+              "degree_s"_a,
+              "degree_t"_a,
+              "control_points"_a,
+              "elems_to_refine"_a );
+
+    py::class_<api::NURBSAdaptiveLocalNavierStokesHierarchicalDiscretization, api::NURBSNavierStokesHierarchicalDiscretization>(
+        m, "NURBSAdaptiveLocalNavierStokesHierarchicalDiscretization" )
+        .def( py::init<const basis::KnotVector&,
+                       const basis::KnotVector&,
+                       const size_t,
+                       const size_t,
+                       const Eigen::MatrixXd&,
+                       const Eigen::VectorXd&,
+                       const std::vector<std::vector<std::pair<size_t, size_t>>>>(),
+              "Create a NURBS hierarchical Navier-Stokes discretization for the adaptive local refinement path. The "
+              "marked cells are expected to come from a fixed parametric adaptive selector on the Python side. This "
+              "class currently reuses the compatible hierarchical backend while preserving rational geometry.",
+              "knot_vec_s"_a,
+              "knot_vec_t"_a,
+              "degree_s"_a,
+              "degree_t"_a,
+              "control_points"_a,
+              "weights"_a,
+              "elems_to_refine"_a )
+        .def( py::init<const basis::KnotVector&,
+                       const basis::KnotVector&,
+                       const size_t,
+                       const size_t,
+                       const Eigen::MatrixXd&,
+                       const std::vector<std::vector<std::pair<size_t, size_t>>>>(),
+              "Create a NURBS hierarchical Navier-Stokes discretization for the adaptive local refinement path using "
+              "homogeneous control points.",
+              "knot_vec_s"_a,
+              "knot_vec_t"_a,
+              "degree_s"_a,
+              "degree_t"_a,
+              "homogeneous_control_points"_a,
+              "elems_to_refine"_a )
+        .def_property_readonly( "weights",
+                                &api::NURBSAdaptiveLocalNavierStokesHierarchicalDiscretization::weights,
+                                "The rational geometry weights." );
 
     m.def(
         "grevillePoints",

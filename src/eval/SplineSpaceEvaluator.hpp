@@ -37,6 +37,8 @@ namespace eval
         /// Flattens the spatial Hessian into parent-coordinate columns ordered
         /// (ss, st, tt) in 2D and (ss, st, su, tt, tu, uu) in 3D.
         virtual Eigen::MatrixXd evaluateParentToSpatialHessian( const Eigen::MatrixXd& cpts ) const;
+        /// Flattens third geometry derivatives as (xxx, xxy, xyy, yyy). Currently supported in 2D.
+        virtual Eigen::MatrixXd evaluateParentToSpatialThirdDerivatives( const Eigen::MatrixXd& cpts ) const;
 
         /// Returns dx/dxi with spatial components in rows and parametric-coordinate
         /// directions in columns.
@@ -44,6 +46,7 @@ namespace eval
         /// Flattens the spatial Hessian into parametric-coordinate columns ordered
         /// (xi-xi, xi-eta, eta-eta) in 2D and the analogous upper-triangular order in 3D.
         virtual Eigen::MatrixXd evaluateParametricToSpatialHessian( const Eigen::MatrixXd& cpts ) const;
+        virtual Eigen::MatrixXd evaluateParametricToSpatialThirdDerivatives( const Eigen::MatrixXd& cpts ) const;
 
         /// Evaluates the extracted spline components at the localized parent point.
         /// For vector-conforming and top-form spaces, the returned components are
@@ -55,11 +58,13 @@ namespace eval
         /// Columns use the symmetric parent-coordinate derivative ordering of
         /// evaluateParentToSpatialHessian, with vector components inside each group.
         virtual Eigen::MatrixXd evaluateBasisSecondDerivativesWrtParentCoordinates() const;
+        virtual Eigen::MatrixXd evaluateBasisThirdDerivativesWrtParentCoordinates() const;
 
         /// Evaluates derivatives of the spline components with respect to
         /// patch-parametric coordinates. Columns are grouped first by parametric
         /// derivative direction and then by vector component.
         virtual Eigen::MatrixXd evaluateBasisFirstDerivativesWrtParametricCoordinates() const;
+        virtual Eigen::MatrixXd evaluateBasisSecondDerivativesWrtParametricCoordinates() const;
 
         virtual Eigen::VectorXd evaluateParametricPoint() const;
 
@@ -112,6 +117,12 @@ namespace eval
         const SplineSpaceEvaluator& vec_evals,
         const SplineSpaceEvaluator& geom_evals,
         const Eigen::MatrixXd& cpts );
+    /// Columns are d2v_x/dx2, d2v_y/dx2, d2v_x/dxdy, d2v_y/dxdy,
+    /// d2v_x/dy2, d2v_y/dy2.
+    Eigen::MatrixXd evaluateSpatialHDivBasisSecondDerivatives(
+        const SplineSpaceEvaluator& vec_evals,
+        const SplineSpaceEvaluator& geom_evals,
+        const Eigen::MatrixXd& cpts );
     /// Top-form Piola transformation from patch-parametric L2 coefficients.
     Eigen::MatrixXd evaluateSpatialL2BasisValues(
         const SplineSpaceEvaluator& l2_evals,
@@ -138,9 +149,11 @@ namespace eval
         virtual Eigen::VectorXd evaluateManifold( const Eigen::MatrixXd& homogeneous_cpts ) const override;
         virtual Eigen::MatrixXd evaluateParentToSpatialJacobian( const Eigen::MatrixXd& homogeneous_cpts ) const override;
         virtual Eigen::MatrixXd evaluateParentToSpatialHessian( const Eigen::MatrixXd& homogeneous_cpts ) const override;
+        virtual Eigen::MatrixXd evaluateParentToSpatialThirdDerivatives( const Eigen::MatrixXd& homogeneous_cpts ) const override;
 
         virtual Eigen::MatrixXd evaluateParametricToSpatialJacobian( const Eigen::MatrixXd& homogeneous_cpts ) const override;
         virtual Eigen::MatrixXd evaluateParametricToSpatialHessian( const Eigen::MatrixXd& homogeneous_cpts ) const override;
+        virtual Eigen::MatrixXd evaluateParametricToSpatialThirdDerivatives( const Eigen::MatrixXd& homogeneous_cpts ) const override;
 
         virtual Eigen::MatrixXd evaluateBasisValuesAtParentPoint() const override;
         virtual Eigen::MatrixXd evaluateBasisFirstDerivativesWrtParentCoordinates() const override;

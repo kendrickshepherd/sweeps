@@ -146,4 +146,55 @@ namespace api
         eval::SplineSpaceEvaluator HDIV;
         eval::SplineSpaceEvaluator L2;
     };
+
+    class NURBSNavierStokesHierarchicalDiscretization : public NavierStokesHierarchicalDiscretization
+    {
+        public:
+        NURBSNavierStokesHierarchicalDiscretization(
+            const basis::KnotVector& kv_s,
+            const basis::KnotVector& kv_t,
+            const size_t degree_s,
+            const size_t degree_t,
+            const Eigen::MatrixXd& control_points,
+            const Eigen::VectorXd& weights,
+            const std::vector<std::vector<std::pair<size_t, size_t>>>& elems_to_refine );
+
+        NURBSNavierStokesHierarchicalDiscretization(
+            const basis::KnotVector& kv_s,
+            const basis::KnotVector& kv_t,
+            const size_t degree_s,
+            const size_t degree_t,
+            const Eigen::MatrixXd& homogeneous_cpts,
+            const std::vector<std::vector<std::pair<size_t, size_t>>>& elems_to_refine );
+
+        virtual ~NURBSNavierStokesHierarchicalDiscretization() = default;
+
+        virtual const Eigen::MatrixXd& controlPoints() const override { return euclidean_cpts; }
+        virtual bool hasRationalGeometry() const override { return true; }
+
+        virtual eval::SplineSpaceEvaluator& getGeometry() override { return Geometry; }
+        virtual const eval::SplineSpaceEvaluator& getGeometry() const override { return Geometry; }
+
+        const Eigen::VectorXd& weights() const { return cpt_weights; }
+
+        private:
+        const Eigen::MatrixXd euclidean_cpts;
+        const Eigen::VectorXd cpt_weights;
+        eval::NURBSSpaceEvaluator Geometry;
+    };
+
+    class AdaptiveLocalNavierStokesHierarchicalDiscretization : public NavierStokesHierarchicalDiscretization
+    {
+        public:
+        using NavierStokesHierarchicalDiscretization::NavierStokesHierarchicalDiscretization;
+        virtual ~AdaptiveLocalNavierStokesHierarchicalDiscretization() = default;
+    };
+
+    class NURBSAdaptiveLocalNavierStokesHierarchicalDiscretization : public NURBSNavierStokesHierarchicalDiscretization
+    {
+        public:
+        using NURBSNavierStokesHierarchicalDiscretization::NURBSNavierStokesHierarchicalDiscretization;
+        virtual ~NURBSAdaptiveLocalNavierStokesHierarchicalDiscretization() = default;
+    };
+
 }

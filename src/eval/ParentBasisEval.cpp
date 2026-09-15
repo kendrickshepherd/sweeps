@@ -54,6 +54,17 @@ namespace eval
                  ( Eigen::VectorXd( p + 1 ) << lower_degree, 0, 0 ).finished() );
     }
 
+    Eigen::VectorXd bernsteinThirdDeriv( const size_t p, const double s )
+    {
+        if( p < 3 ) return Eigen::VectorXd::Zero( p + 1 );
+        const Eigen::VectorXd lower_degree = bernstein( p - 3, s );
+        return p * ( p - 1 ) * ( p - 2 ) *
+               ( ( Eigen::VectorXd( p + 1 ) << 0, 0, 0, lower_degree ).finished() -
+                 3 * ( Eigen::VectorXd( p + 1 ) << 0, 0, lower_degree, 0 ).finished() +
+                 3 * ( Eigen::VectorXd( p + 1 ) << 0, lower_degree, 0, 0 ).finished() -
+                 ( Eigen::VectorXd( p + 1 ) << lower_degree, 0, 0, 0 ).finished() );
+    }
+
     Eigen::VectorXd bernsteinTP( const size_t p, const size_t q, const double s, const double t )
     {
         const Eigen::VectorXd s_evals = bernstein( p, s );
@@ -86,6 +97,25 @@ namespace eval
         return ( Eigen::MatrixX3d( s_evals.size() * t_evals.size(), 3 ) << Eigen::kroneckerProduct( t_evals, s_dderiv ),
                  Eigen::kroneckerProduct( t_deriv, s_deriv ),
                  Eigen::kroneckerProduct( t_dderiv, s_evals ) )
+            .finished();
+    }
+
+    Eigen::MatrixXd bernsteinTPThirdDeriv( const size_t p, const size_t q, const double s, const double t )
+    {
+        const Eigen::VectorXd s_evals = bernstein( p, s );
+        const Eigen::VectorXd t_evals = bernstein( q, t );
+        const Eigen::VectorXd s_deriv = bernsteinFirstDeriv( p, s );
+        const Eigen::VectorXd t_deriv = bernsteinFirstDeriv( q, t );
+        const Eigen::VectorXd s_dderiv = bernsteinSecondDeriv( p, s );
+        const Eigen::VectorXd t_dderiv = bernsteinSecondDeriv( q, t );
+        const Eigen::VectorXd s_ddderiv = bernsteinThirdDeriv( p, s );
+        const Eigen::VectorXd t_ddderiv = bernsteinThirdDeriv( q, t );
+
+        return ( Eigen::MatrixXd( s_evals.size() * t_evals.size(), 4 )
+                     << Eigen::kroneckerProduct( t_evals, s_ddderiv ),
+                 Eigen::kroneckerProduct( t_deriv, s_dderiv ),
+                 Eigen::kroneckerProduct( t_dderiv, s_deriv ),
+                 Eigen::kroneckerProduct( t_ddderiv, s_evals ) )
             .finished();
     }
 
@@ -406,8 +436,13 @@ namespace eval
                         mEvals.middleCols<2>( 1 ) =
                             bernsteinTPFirstDeriv( degs.at( 0 ), degs.at( 1 ), point.mPoint( 0 ), point.mPoint( 1 ) );
                         if( n_derivatives > 1 )
+                        {
                             mEvals.middleCols<3>( 3 ) =
                                 bernsteinTPSecondDeriv( degs.at( 0 ), degs.at( 1 ), point.mPoint( 0 ), point.mPoint( 1 ) );
+                            if( n_derivatives > 2 )
+                                mEvals.middleCols<4>( 6 ) =
+                                    bernsteinTPThirdDeriv( degs.at( 0 ), degs.at( 1 ), point.mPoint( 0 ), point.mPoint( 1 ) );
+                        }
                     }
                     break;
                 case 3:

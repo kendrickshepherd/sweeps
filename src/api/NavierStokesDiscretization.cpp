@@ -60,6 +60,7 @@ namespace api
 
             return control_points;
         }
+
     }
 
     basis::VectorConformingTPSplineSpace buildHDIV( const basis::TPSplineSpace& H1 )
@@ -88,8 +89,8 @@ namespace api
           L2_ss( buildL2( H1_ss.basisComplex().parametricAtlasPtr(), HDIV_ss ) ),
           cmap_bdry( H1_ss.basisComplex().parametricAtlas().cmap(), { topology::Dart( 0 ) } ),
           cpts( cpts ),
-          H1( H1_ss, 2 ),
-          HDIV( HDIV_ss, 1 ),
+          H1( H1_ss, 3 ),
+          HDIV( HDIV_ss, 2 ),
           L2( L2_ss, 1 )
     {
         checkGeometryColumnCount( H1_ss, cpts );
@@ -113,7 +114,7 @@ namespace api
         : NavierStokesTPDiscretization( kv_s, kv_t, degree_s, degree_t, homogeneous_cpts ),
           euclidean_cpts( dehomogenizedControlPoints( homogeneous_cpts ) ),
           cpt_weights( weightsFromHomogeneousControlPoints( homogeneous_cpts ) ),
-          Geometry( H1_ss, 2 )
+          Geometry( H1_ss, 3 )
     {}
 
     std::vector<std::vector<topology::Cell>>
@@ -242,10 +243,36 @@ namespace api
           L2_ss( buildL2( H1_ss.basisComplex().parametricAtlasPtr(), HDIV_ss ) ),
           cmap_bdry( H1_ss.basisComplex().parametricAtlas().cmap() ),
           cpts( unrefined_cpts * prolongationOperator( H1_ss ).transpose() ),
-          H1( H1_ss, 2 ),
-          HDIV( HDIV_ss, 1 ),
+          H1( H1_ss, 3 ),
+          HDIV( HDIV_ss, 2 ),
           L2( L2_ss, 1 )
     {
         checkGeometryColumnCount( H1_ss, cpts );
     }
+
+    NURBSNavierStokesHierarchicalDiscretization::NURBSNavierStokesHierarchicalDiscretization(
+        const basis::KnotVector& kv_s,
+        const basis::KnotVector& kv_t,
+        const size_t degree_s,
+        const size_t degree_t,
+        const Eigen::MatrixXd& control_points,
+        const Eigen::VectorXd& weights,
+        const std::vector<std::vector<std::pair<size_t, size_t>>>& elems_to_refine )
+        : NURBSNavierStokesHierarchicalDiscretization(
+              kv_s, kv_t, degree_s, degree_t, homogeneousControlPoints( control_points, weights ), elems_to_refine )
+    {}
+
+    NURBSNavierStokesHierarchicalDiscretization::NURBSNavierStokesHierarchicalDiscretization(
+        const basis::KnotVector& kv_s,
+        const basis::KnotVector& kv_t,
+        const size_t degree_s,
+        const size_t degree_t,
+        const Eigen::MatrixXd& homogeneous_cpts,
+        const std::vector<std::vector<std::pair<size_t, size_t>>>& elems_to_refine )
+        : NavierStokesHierarchicalDiscretization( kv_s, kv_t, degree_s, degree_t, homogeneous_cpts, elems_to_refine ),
+          euclidean_cpts( dehomogenizedControlPoints( homogeneous_cpts ) ),
+          cpt_weights( weightsFromHomogeneousControlPoints( homogeneous_cpts ) ),
+          Geometry( H1_ss, 3 )
+    {}
+
 }

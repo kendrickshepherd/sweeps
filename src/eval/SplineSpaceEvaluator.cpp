@@ -3,6 +3,7 @@
 #include <ParentBasis.hpp>
 #include <ParametricAtlas.hpp>
 #include <Eigen/Dense>
+#include <array>
 #include <string>
 #include <utility>
 
@@ -50,6 +51,11 @@ namespace eval
         return cpts( Eigen::all, mConnect ) * evaluateBasisSecondDerivativesWrtParentCoordinates();
     }
 
+    Eigen::MatrixXd SplineSpaceEvaluator::evaluateParentToSpatialThirdDerivatives( const Eigen::MatrixXd& cpts ) const
+    {
+        return cpts( Eigen::all, mConnect ) * evaluateBasisThirdDerivativesWrtParentCoordinates();
+    }
+
     Eigen::MatrixXd SplineSpaceEvaluator::evaluateParametricToSpatialJacobian( const Eigen::MatrixXd& cpts ) const
     {
         const auto first_derivs = evaluateBasisFirstDerivativesWrtParentCoordinates(); // Call this first to catch empty mCurrentCell
@@ -88,6 +94,18 @@ namespace eval
                        .matrix()
                        .asDiagonal(); // xi-xi, xi-eta, xi-zeta, eta-eta, eta-zeta, zeta-zeta
         }
+    }
+
+    Eigen::MatrixXd SplineSpaceEvaluator::evaluateParametricToSpatialThirdDerivatives( const Eigen::MatrixXd& cpts ) const
+    {
+        const auto third = evaluateBasisThirdDerivativesWrtParentCoordinates();
+        if( mSpline.basisComplex().parametricAtlas().cmap().dim() != 2 )
+            throw std::runtime_error( "Third parametric geometry derivatives are currently supported only in 2D." );
+        const double hs = mParametricLengths( 0 );
+        const double ht = mParametricLengths( 1 );
+        return cpts( Eigen::all, mConnect ) * third *
+               Eigen::Vector4d( hs * hs * hs, hs * hs * ht, hs * ht * ht, ht * ht * ht )
+                   .cwiseInverse().asDiagonal();
     }
 
     Eigen::MatrixXd SplineSpaceEvaluator::evaluateBasisValuesAtParentPoint() const
@@ -130,6 +148,33 @@ namespace eval
         const size_t param_dim = mSpline.basisComplex().parametricAtlas().cmap().dim();
         const size_t vec_comps = mSpline.numVectorComponents();
         return mExOp * mLocalEvals->mEvals.middleCols( vec_comps * ( 1 + param_dim ), vec_comps * param_dim * ( param_dim + 1 ) / 2 );
+    }
+
+    Eigen::MatrixXd SplineSpaceEvaluator::evaluateBasisThirdDerivativesWrtParentCoordinates() const
+    {
+        if( not mLocalEvals.has_value() ) throw std::runtime_error( "Must localize evaluator before evaluating" );
+        if( numDerivatives() < 3 )
+            throw std::runtime_error( "Insufficient derivatives requested on SplineSpaceEvaluator construction." );
+        const size_t param_dim = mSpline.basisComplex().parametricAtlas().cmap().dim();
+        if( param_dim != 2 or mSpline.numVectorComponents() != 1 )
+            throw std::runtime_error( "Third basis derivatives are currently supported only for scalar 2D spaces." );
+        return mExOp * mLocalEvals->mEvals.middleCols( 6, 4 );
+    }
+
+    Eigen::MatrixXd SplineSpaceEvaluator::evaluateBasisSecondDerivativesWrtParametricCoordinates() const
+    {
+        const auto second = evaluateBasisSecondDerivativesWrtParentCoordinates();
+        const size_t param_dim = mSpline.basisComplex().parametricAtlas().cmap().dim();
+        if( param_dim != 2 )
+            throw std::runtime_error( "Second parametric basis derivatives are currently supported only in 2D." );
+        const size_t ncomp = mSpline.numVectorComponents();
+        Eigen::VectorXd scales( 3 * ncomp );
+        const double hs = mParametricLengths( 0 );
+        const double ht = mParametricLengths( 1 );
+        scales.segment( 0, ncomp ).setConstant( hs * hs );
+        scales.segment( ncomp, ncomp ).setConstant( hs * ht );
+        scales.segment( 2 * ncomp, ncomp ).setConstant( ht * ht );
+        return second * scales.cwiseInverse().asDiagonal();
     }
 
     namespace
@@ -402,6 +447,94 @@ namespace eval
         return output;
     }
 
+    Eigen::MatrixXd evaluateSpatialHDivBasisSecondDerivatives( const SplineSpaceEvaluator& vec_evals,
+                                                                const SplineSpaceEvaluator& geom_evals,
+                                                                const Eigen::MatrixXd& cpts )
+    {
+        const Eigen::MatrixXd J = geom_evals.evaluateParametricToSpatialJacobian( cpts );
+        requireSquareJacobian( J, "Spatial H(div) second derivative evaluation" );
+        if( J.rows() != 2 or vec_evals.splineSpace().numVectorComponents() != 2 )
+            throw std::runtime_error( "Spatial H(div) second derivatives are currently supported only in 2D." );
+
+        const Eigen::MatrixXd G = J.inverse();
+        const double d = J.determinant();
+        const auto J1 = evaluateParametricToSpatialJacobianFirstDerivatives( geom_evals, cpts );
+        const Eigen::MatrixXd geom3 = geom_evals.evaluateParametricToSpatialThirdDerivatives( cpts );
+        const auto triple_col = []( size_t a, size_t b, size_t c ) {
+            return a + b + c; // xxx, xxy, xyy, yyy in 2D
+        };
+
+        std::vector<std::vector<Eigen::MatrixXd>> J2(
+            2, std::vector<Eigen::MatrixXd>( 2, Eigen::MatrixXd( 2, 2 ) ) );
+        for( size_t i = 0; i < 2; ++i )
+            for( size_t m = 0; m < 2; ++m )
+                for( size_t j = 0; j < 2; ++j )
+                    J2[i][m].col( j ) = geom3.col( triple_col( i, m, j ) );
+
+        std::vector<Eigen::MatrixXd> G1( 2 );
+        Eigen::Vector2d d1;
+        Eigen::Vector2d trace_term;
+        for( size_t i = 0; i < 2; ++i )
+        {
+            G1[i] = -G * J1[i] * G;
+            trace_term( i ) = ( G * J1[i] ).trace();
+            d1( i ) = d * trace_term( i );
+        }
+
+        Eigen::Matrix2d d2;
+        for( size_t i = 0; i < 2; ++i )
+            for( size_t m = 0; m < 2; ++m )
+                d2( i, m ) = d1( m ) * trace_term( i ) +
+                             d * ( G1[m] * J1[i] + G * J2[i][m] ).trace();
+
+        const Eigen::MatrixXd B = J / d;
+        std::vector<Eigen::MatrixXd> B1( 2 );
+        std::vector<std::vector<Eigen::MatrixXd>> B2(
+            2, std::vector<Eigen::MatrixXd>( 2, Eigen::MatrixXd( 2, 2 ) ) );
+        for( size_t i = 0; i < 2; ++i )
+            B1[i] = J1[i] / d - J * d1( i ) / ( d * d );
+        for( size_t i = 0; i < 2; ++i )
+            for( size_t m = 0; m < 2; ++m )
+                B2[i][m] = J2[i][m] / d - J1[i] * d1( m ) / ( d * d ) -
+                           J1[m] * d1( i ) / ( d * d ) - J * d2( i, m ) / ( d * d ) +
+                           2.0 * J * d1( i ) * d1( m ) / ( d * d * d );
+
+        const Eigen::MatrixXd N = vec_evals.evaluateBasisValuesAtParentPoint();
+        const Eigen::MatrixXd N1 = vec_evals.evaluateBasisFirstDerivativesWrtParametricCoordinates();
+        const Eigen::MatrixXd N2 = vec_evals.evaluateBasisSecondDerivativesWrtParametricCoordinates();
+        Eigen::MatrixXd out = Eigen::MatrixXd::Zero( N.rows(), 6 );
+
+        for( Eigen::Index f = 0; f < N.rows(); ++f )
+        {
+            const Eigen::Vector2d n = N.row( f ).transpose();
+            Eigen::Matrix2d n1;
+            for( size_t i = 0; i < 2; ++i ) n1.col( i ) = N1.row( f ).segment<2>( 2 * i ).transpose();
+            std::array<std::array<Eigen::Vector2d, 2>, 2> n2;
+            for( size_t i = 0; i < 2; ++i )
+                for( size_t m = 0; m < 2; ++m )
+                    n2[i][m] = N2.row( f ).segment<2>( 2 * symmetricDerivativeColumn( i, m, 2 ) ).transpose();
+
+            Eigen::Matrix<Eigen::Vector2d, 2, 1> Q;
+            for( size_t i = 0; i < 2; ++i ) Q( i ) = B1[i] * n + B * n1.col( i );
+
+            for( size_t xj = 0; xj < 2; ++xj )
+                for( size_t xk = xj; xk < 2; ++xk )
+                {
+                    Eigen::Vector2d value = Eigen::Vector2d::Zero();
+                    for( size_t m = 0; m < 2; ++m )
+                        for( size_t i = 0; i < 2; ++i )
+                        {
+                            const Eigen::Vector2d Qim = B2[i][m] * n + B1[i] * n1.col( m ) +
+                                                        B1[m] * n1.col( i ) + B * n2[i][m];
+                            value += G( m, xk ) * ( G1[m]( i, xj ) * Q( i ) + G( i, xj ) * Qim );
+                        }
+                    const size_t group = symmetricDerivativeColumn( xj, xk, 2 );
+                    out.row( f ).segment<2>( 2 * group ) = value.transpose();
+                }
+        }
+        return out;
+    }
+
     Eigen::MatrixXd evaluateSpatialL2BasisValues( const SplineSpaceEvaluator& l2_evals,
                                              const SplineSpaceEvaluator& geom_evals,
                                              const Eigen::MatrixXd& cpts )
@@ -525,6 +658,43 @@ namespace eval
         return hess;
     }
 
+    Eigen::MatrixXd NURBSSpaceEvaluator::evaluateParentToSpatialThirdDerivatives( const Eigen::MatrixXd& cpts ) const
+    {
+        const Eigen::MatrixXd bsp3 = cpts( Eigen::all, mConnect ) *
+                                     SplineSpaceEvaluator::evaluateBasisThirdDerivativesWrtParentCoordinates();
+        const Eigen::MatrixXd bsp2 = cpts( Eigen::all, mConnect ) *
+                                     SplineSpaceEvaluator::evaluateBasisSecondDerivativesWrtParentCoordinates();
+        const Eigen::MatrixXd bsp1 = cpts( Eigen::all, mConnect ) *
+                                     SplineSpaceEvaluator::evaluateBasisFirstDerivativesWrtParentCoordinates();
+        const Eigen::VectorXd bsp0 = cpts( Eigen::all, mConnect ) *
+                                     SplineSpaceEvaluator::evaluateBasisValuesAtParentPoint();
+        const Eigen::VectorXd X = bsp0.head( bsp0.size() - 1 );
+        const double w = bsp0( bsp0.size() - 1 );
+        const auto X1 = bsp1.topRows( bsp1.rows() - 1 );
+        const Eigen::Vector2d w1 = bsp1.bottomRows( 1 ).transpose();
+        const auto X2 = bsp2.topRows( bsp2.rows() - 1 );
+        const Eigen::Vector3d w2 = bsp2.bottomRows( 1 ).transpose();
+        const auto X3 = bsp3.topRows( bsp3.rows() - 1 );
+        const Eigen::Vector4d w3 = bsp3.bottomRows( 1 ).transpose();
+        Eigen::MatrixXd out( X3.rows(), 4 );
+        for( size_t col = 0; col < 4; ++col )
+        {
+            const size_t a = col == 3 ? 1 : 0;
+            const size_t c = col == 0 ? 0 : 1;
+            const size_t b = col < 2 ? 0 : 1;
+            const size_t ab = symmetricDerivativeColumn( a, b, 2 );
+            const size_t ac = symmetricDerivativeColumn( a, c, 2 );
+            const size_t bc = symmetricDerivativeColumn( b, c, 2 );
+            out.col( col ) = X3.col( col ) / w -
+                ( X2.col( ab ) * w1( c ) + X2.col( ac ) * w1( b ) + X2.col( bc ) * w1( a ) +
+                  X1.col( a ) * w2( bc ) + X1.col( b ) * w2( ac ) + X1.col( c ) * w2( ab ) + X * w3( col ) ) / ( w * w ) +
+                2.0 * ( X1.col( a ) * w1( b ) * w1( c ) + X1.col( b ) * w1( a ) * w1( c ) +
+                        X1.col( c ) * w1( a ) * w1( b ) + X * ( w2( ab ) * w1( c ) + w2( ac ) * w1( b ) + w2( bc ) * w1( a ) ) ) / ( w * w * w ) -
+                6.0 * X * w1( a ) * w1( b ) * w1( c ) / ( w * w * w * w );
+        }
+        return out;
+    }
+
     Eigen::MatrixXd NURBSSpaceEvaluator::evaluateParametricToSpatialJacobian( const Eigen::MatrixXd& cpts ) const
     {
         const auto jac = evaluateParentToSpatialJacobian( cpts );
@@ -561,6 +731,15 @@ namespace eval
                               .matrix()
                               .asDiagonal(); // xi-xi, xi-eta, xi-zeta, eta-eta, eta-zeta, zeta-zeta
         }
+    }
+
+    Eigen::MatrixXd NURBSSpaceEvaluator::evaluateParametricToSpatialThirdDerivatives( const Eigen::MatrixXd& cpts ) const
+    {
+        const auto third = evaluateParentToSpatialThirdDerivatives( cpts );
+        const double hs = mParametricLengths( 0 );
+        const double ht = mParametricLengths( 1 );
+        return third * Eigen::Vector4d( hs * hs * hs, hs * hs * ht, hs * ht * ht, ht * ht * ht )
+                           .cwiseInverse().asDiagonal();
     }
 
     Eigen::MatrixXd NURBSSpaceEvaluator::evaluateBasisValuesAtParentPoint() const
