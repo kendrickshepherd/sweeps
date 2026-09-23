@@ -545,6 +545,127 @@ PYBIND11_MODULE( splines, m )
               "control_points"_a,
               "elems_to_refine"_a )
         .def(
+            "hierarchicalRefinementDiagnostics",
+            []( const api::NavierStokesHierarchicalDiscretization& nsd ) {
+                const auto scalar_summary = []( const basis::HierarchicalTPSplineSpace& space ) {
+                    py::dict summary;
+                    py::list levels;
+                    size_t coarse_deactivated_count = 0;
+                    size_t fine_active_count = 0;
+                    std::vector<size_t> coarse_truncated_ids;
+
+                    for( size_t level = 0; level < space.refinementLevels().size(); level++ )
+                    {
+                        const size_t full_count = space.refinementLevels().at( level )->numFunctions();
+                        const auto& active_functions = space.activeFunctions().at( level );
+
+                        std::vector<size_t> active_ids;
+                        active_ids.reserve( active_functions.size() );
+                        for( const basis::FunctionId& fid : active_functions )
+                            active_ids.push_back( static_cast<size_t>( fid.id() ) );
+
+                        std::vector<size_t> inactive_ids;
+                        inactive_ids.reserve( full_count - active_ids.size() );
+                        size_t active_index = 0;
+                        for( size_t fid = 0; fid < full_count; fid++ )
+                        {
+                            if( active_index < active_ids.size() and active_ids.at( active_index ) == fid )
+                                active_index++;
+                            else
+                                inactive_ids.push_back( fid );
+                        }
+
+                        py::dict level_summary;
+                        level_summary["level"] = level;
+                        level_summary["full_count"] = full_count;
+                        level_summary["active_count"] = active_ids.size();
+                        level_summary["inactive_count"] = inactive_ids.size();
+                        level_summary["active_ids"] = active_ids;
+                        level_summary["inactive_ids"] = inactive_ids;
+                        levels.append( level_summary );
+
+                        if( level == 0 )
+                            coarse_deactivated_count = inactive_ids.size();
+                        else
+                            fine_active_count += active_ids.size();
+                    }
+
+                    if( space.refinementLevels().size() > 1 )
+                    {
+                        const Eigen::SparseMatrix<double> refinement = basis::refinementOp(
+                            *space.refinementLevels().at( 0 ),
+                            *space.refinementLevels().at( 1 ),
+                            1e-10 );
+                        const auto& coarse_active = space.activeFunctions().at( 0 );
+                        const auto& fine_active = space.activeFunctions().at( 1 );
+                        for( const basis::FunctionId& coarse_fid : coarse_active )
+                        {
+                            bool truncated = false;
+                            for( const basis::FunctionId& fine_fid : fine_active )
+                            {
+                                if( refinement.coeff( coarse_fid.id(), fine_fid.id() ) != 0.0 )
+                                {
+                                    truncated = true;
+                                    break;
+                                }
+                            }
+                            if( truncated )
+                                coarse_truncated_ids.push_back(
+                                    static_cast<size_t>( coarse_fid.id() ) );
+                        }
+                    }
+
+                    summary["total_active_count"] = space.numFunctions();
+                    summary["coarse_deactivated_count"] = coarse_deactivated_count;
+                    summary["coarse_truncated_count"] = coarse_truncated_ids.size();
+                    summary["coarse_truncated_ids"] = coarse_truncated_ids;
+                    summary["coarse_modified_count"] =
+                        coarse_deactivated_count + coarse_truncated_ids.size();
+                    summary["fine_active_count"] = fine_active_count;
+                    summary["levels"] = levels;
+                    return summary;
+                };
+
+                py::dict result;
+                const py::dict h1 = scalar_summary( nsd.H1_ss );
+                const py::dict l2 = scalar_summary( nsd.L2_ss );
+                py::list hdiv_components;
+                bool hdiv_support_update = true;
+                for( const auto& component : nsd.HDIV_ss.scalarBases() )
+                {
+                    const py::dict component_summary = scalar_summary( *component );
+                    hdiv_components.append( component_summary );
+                    hdiv_support_update =
+                        hdiv_support_update and
+                        component_summary["coarse_modified_count"].cast<size_t>() > 0 and
+                        component_summary["fine_active_count"].cast<size_t>() > 0;
+                }
+
+                const long long euler_characteristic =
+                    static_cast<long long>( nsd.H1_ss.numFunctions() ) -
+                    static_cast<long long>( nsd.HDIV_ss.numFunctions() ) +
+                    static_cast<long long>( nsd.L2_ss.numFunctions() );
+                const bool pressure_support_update =
+                    l2["coarse_deactivated_count"].cast<size_t>() > 0 and
+                    l2["fine_active_count"].cast<size_t>() > 0;
+
+                result["H1"] = h1;
+                result["HDIV_components"] = hdiv_components;
+                result["HDIV_total_active_count"] = nsd.HDIV_ss.numFunctions();
+                result["L2"] = l2;
+                result["euler_characteristic"] = euler_characteristic;
+                result["expected_euler_characteristic"] = 1;
+                result["support_update_check"] = hdiv_support_update and pressure_support_update;
+                result["dimension_compatibility_check"] = euler_characteristic == 1;
+                result["compatible"] =
+                    hdiv_support_update and pressure_support_update and euler_characteristic == 1;
+                return result;
+            },
+            "Report the actual hierarchical active, deactivated, and truncated basis functions for H1, both H(div) "
+            "components, and L2. The compatibility flag requires a coarse-to-fine support update in both "
+            "velocity components, actual coarse L2 deactivation with fine pressure activation, and "
+            "H1-H(div)+L2 = 1." )
+        .def(
             "boundaryEdges",
             []( const api::NavierStokesHierarchicalDiscretization& nsd, const api::PatchSide& side ) {
                 const topology::HierarchicalTPCombinatorialMap& cmap = nsd.H1_ss.basisComplex().parametricAtlas().cmap();
