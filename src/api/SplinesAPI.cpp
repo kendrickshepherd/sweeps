@@ -12,6 +12,98 @@
 namespace py = pybind11;
 using namespace py::literals;
 
+namespace
+{
+    std::vector<topology::Edge> tpBoundaryEdges( const api::NavierStokesTPDiscretization& nsd,
+                                                  const api::PatchSide& side )
+    {
+        const topology::TPCombinatorialMap& tp_map = nsd.H1_ss.basisComplex().parametricAtlas().cmap();
+        std::vector<topology::Edge> out;
+        switch( side )
+        {
+            case api::PatchSide::S0:
+            case api::PatchSide::S1:
+            {
+                const topology::Dart source_dart(
+                    side == api::PatchSide::S0 ? 0 : tp_map.sourceCMap().maxDartId() );
+                const auto pos = side == api::PatchSide::S0
+                    ? topology::TPCombinatorialMap::TPDartPos::DartPos3
+                    : topology::TPCombinatorialMap::TPDartPos::DartPos1;
+                iterateDartsWhile( tp_map.lineCMap(), [&]( const topology::Dart& line_dart ) {
+                    out.push_back( tp_map.flatten( source_dart, line_dart, pos ) );
+                    return true;
+                } );
+                break;
+            }
+            case api::PatchSide::T0:
+            case api::PatchSide::T1:
+            {
+                const topology::Dart line_dart(
+                    side == api::PatchSide::T0 ? 0 : tp_map.sourceCMap().maxDartId() );
+                const auto pos = side == api::PatchSide::T0
+                    ? topology::TPCombinatorialMap::TPDartPos::DartPos0
+                    : topology::TPCombinatorialMap::TPDartPos::DartPos2;
+                iterateDartsWhile( tp_map.sourceCMap(), [&]( const topology::Dart& source_dart ) {
+                    out.push_back( tp_map.flatten( source_dart, line_dart, pos ) );
+                    return true;
+                } );
+                break;
+            }
+        }
+        return out;
+    }
+
+    std::vector<topology::Edge> hierarchicalBoundaryEdges(
+        const api::NavierStokesHierarchicalDiscretization& nsd,
+        const api::PatchSide& side )
+    {
+        const topology::HierarchicalTPCombinatorialMap& cmap =
+            nsd.H1_ss.basisComplex().parametricAtlas().cmap();
+        const topology::TPCombinatorialMap& base_cmap = *cmap.refinementLevels().front();
+        std::vector<topology::Edge> out;
+        const auto add_active_descendants = [&]( const topology::Edge& edge ) {
+            const topology::Dart global_d = cmap.dartRanges().toGlobalDart( 0, edge.dart() );
+            cmap.iterateLeafDescendants( global_d, [&]( const topology::Dart& leaf_d ) {
+                out.push_back( leaf_d );
+                return true;
+            } );
+        };
+
+        switch( side )
+        {
+            case api::PatchSide::S0:
+            case api::PatchSide::S1:
+            {
+                const topology::Dart source_dart(
+                    side == api::PatchSide::S0 ? 0 : base_cmap.sourceCMap().maxDartId() );
+                const auto pos = side == api::PatchSide::S0
+                    ? topology::TPCombinatorialMap::TPDartPos::DartPos3
+                    : topology::TPCombinatorialMap::TPDartPos::DartPos1;
+                iterateDartsWhile( base_cmap.lineCMap(), [&]( const topology::Dart& line_dart ) {
+                    add_active_descendants( base_cmap.flatten( source_dart, line_dart, pos ) );
+                    return true;
+                } );
+                break;
+            }
+            case api::PatchSide::T0:
+            case api::PatchSide::T1:
+            {
+                const topology::Dart line_dart(
+                    side == api::PatchSide::T0 ? 0 : base_cmap.sourceCMap().maxDartId() );
+                const auto pos = side == api::PatchSide::T0
+                    ? topology::TPCombinatorialMap::TPDartPos::DartPos0
+                    : topology::TPCombinatorialMap::TPDartPos::DartPos2;
+                iterateDartsWhile( base_cmap.sourceCMap(), [&]( const topology::Dart& source_dart ) {
+                    add_active_descendants( base_cmap.flatten( source_dart, line_dart, pos ) );
+                    return true;
+                } );
+                break;
+            }
+        }
+        return out;
+    }
+}
+
 PYBIND11_MODULE( splines, m )
 {
     m.doc() = "Plugin providing a spline discretization for Navier Stokes problems";
@@ -457,6 +549,17 @@ PYBIND11_MODULE( splines, m )
             "A list of all edges on a given side of the discretization spline patch",
             "side"_a )
         .def(
+            "boundaryElementDarts",
+            []( const api::NavierStokesTPDiscretization& nsd, const api::PatchSide& side ) {
+                const topology::TPCombinatorialMap& cmap = nsd.H1_ss.basisComplex().parametricAtlas().cmap();
+                py::list out;
+                for( const topology::Edge& edge : tpBoundaryEdges( nsd, side ) )
+                    out.append( topology::lowestDartId( cmap, topology::Face( edge.dart() ) ) );
+                return out;
+            },
+            "Lowest dart id of every active element touching a given patch side",
+            "side"_a )
+        .def(
             "boundaryEdges",
             []( const api::NavierStokesDiscretization& nsd ) {
                 std::vector<topology::Edge> out;
@@ -730,6 +833,18 @@ PYBIND11_MODULE( splines, m )
                 return out;
             },
             "A list of all edges on a given side of the discretization spline patch",
+            "side"_a )
+        .def(
+            "boundaryElementDarts",
+            []( const api::NavierStokesHierarchicalDiscretization& nsd, const api::PatchSide& side ) {
+                const topology::HierarchicalTPCombinatorialMap& cmap =
+                    nsd.H1_ss.basisComplex().parametricAtlas().cmap();
+                py::list out;
+                for( const topology::Edge& edge : hierarchicalBoundaryEdges( nsd, side ) )
+                    out.append( topology::lowestDartId( cmap, topology::Face( edge.dart() ) ) );
+                return out;
+            },
+            "Lowest dart id of every active leaf element touching a given patch side",
             "side"_a )
         .def(
             "boundaryEdges",
