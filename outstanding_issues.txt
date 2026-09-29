@@ -1,7 +1,93 @@
 Outstanding Issues and Planned Work
 =====================================
-Branch: piolas
-Last updated: 2026-07-29
+Branch: master
+Last updated: 2026-09-29
+
+
+-------------------------------------------------------------------------------
+PHASE 0 RESULTS — MEASURED 2026-09-29
+-------------------------------------------------------------------------------
+
+STATUS: COMPLETE, pending commit.  The harness now carries 148 executable
+assertions across 6 cases.  It previously had NONE - a green run then proved
+only that the cases did not throw, and the conclusions below had been read off
+printed diagnostics.  The 3D limitation is formally scoped out below rather
+than fixed.
+
+Harness: test/Phase0_Characterization_test.cpp (new; one additive line in
+test/CMakeLists.txt registers it).  No production code was changed in Phase 0.
+Assertions are labelled in two classes, and the distinction is load-bearing:
+
+  PERMANENT - invariants that stay true after the merge defect is fixed:
+              reversed Flip1d pairing, equal span lengths under reversed
+              pairing and unequal under identity, requested leaf sets
+              preserved, and B3's rejection of a self-glued non-palindromic
+              patch.
+  TEMPORARY - pins the CURRENT DEFECTIVE behaviour so a silent semantic change
+              fails loudly: identity merge, numFunctions 25 (B2) and 20 (B4),
+              shared counts 1 and 2, the current 3D column-match counts, and
+              item 1's H(div)/H(curl) rejection.  Each MUST be updated
+              ATOMICALLY with the corresponding fix.  The TEMPORARY block in
+              EXPERIMENT B4 is the designated regression test for the merge
+              fix.
+
+Verification: 148 assertions in 6 cases, all pass; full non-slow suite 174/174
+in 123 s.
+
+Baseline: 168/168 ctest tests pass, 0 failures, 151 s, excluding the three
+[slow] cases via ctest -E "Tracing from all the". (Note: -E "macaroni" is the
+wrong filter - it also drops two non-slow tests.) Items 13 and 14 show no
+pre-existing failures, so later breakage is attributable.
+
+Experiment A - asymmetric same-mesh interface leaves (item 1).
+  Fixture: identical knot vectors on both patches; patch 0 refined at its max-s
+  interface, patch 1 left coarse at its min-s interface.
+  Result: requested leaf sets are preserved exactly. Level 0 requested 3 cells,
+  effective 3; level 1 requested 2, effective 2; dart sets match at both levels.
+  The scalar HierarchicalMultiPatchSplineSpace builds, 24 functions. Both
+  buildHDivHierarchicalMultiPatchSplineSpace and the H(curl) equivalent throw
+  "requires matching leaf elements across patch interfaces".
+  Conclusion: no constructor coercion occurs in the TESTED configuration, which
+  is 2D, two-patch, same-mesh, a single interface, Flip1d, min-s against max-s.
+  NOT established for 3D, for more than two patches, for a patch participating
+  in several interfaces, or for other sides and permutations. Within that scope
+  the only gate is at
+  VectorConformingHierarchicalMultiPatchSplineSpace.cpp:130-132.
+
+Experiment B - per-element cross-patch correspondence (item 2).
+  Scope of evidence: DISCRIMINATING for 2D Flip1d element pairing. For 3D the
+  observations are PRELIMINARY and NONDISCRIMINATING - those fixtures carry one
+  interface element per patch, so no reversal or axis swap can change which
+  element pairs with which, and only extraction column order is observable.
+  Multi-element, non-palindromic 3D fixtures do not exist yet and are a
+  prerequisite for designing the shared interface transform and for finalizing
+  the canonical trace embedding.
+  Measured for H1, H(div) and H(curl).
+  B1: 2D Flip1d H1 shares only 1 function per paired element instead of 3;
+      coefficients agree only after reversing the trace column order.
+  B2: the merge gives patch 1 element {0,t} the same global ids as patch 0
+      element {0,t} (identity), while patchTraceMeshInterfaces pairs {0,0} with
+      {0,1} (reversed). The two mechanisms disagree.
+  B4: on a mirrored asymmetric interface the merge is still identity and still
+      succeeds; 20 = 12+12-4, so all four interface functions merge on the
+      wrong correspondence.
+  Convention split: permuteTraceSideIndex, traceAxisTransforms /
+  compatibleKnotPatterns, patchTraceMeshInterfaces and the hierarchical leaf
+  check all honour the reversal; the DOF merge does not.
+  3D caveat: the 3D fixtures have one element per patch, so flip(0) on a
+  length-1 axis is a no-op and they cannot test pairing at all. They test column
+  ordering only: ZeroToZero agrees under identity (9/9, 4/4, 12/12); ZeroToOne
+  and ZeroToThree agree under neither; ZeroToTwo agrees for H1 under full column
+  reversal (9/9) but gives H(div) 0/4 and H(curl) 0/12.
+  Flip1d reversal is AUTHORITATIVE.  It is the established semantics in
+  topology, compatibility validation, trace pairing and hierarchical
+  correspondence; the function-ID merge is the one inconsistent component.
+  This is settled by the investigation, not an open design choice.  An aligned
+  2D permutation, if ever wanted, is a separate API extension and is NOT part
+  of this correction.
+  Open question for Stage 1: whether the identity correspondence originates in
+  MultiPatchCombinatorialMap dart identification, in the conversion of that
+  adjacency into tensor indices, or in the scalar/vector function-id merge.
 
 
 MEDIUM PRIORITY — Architectural / Correctness
@@ -11,6 +97,13 @@ MEDIUM PRIORITY — Architectural / Correctness
    Leaf Selection
    File(s): src/basis/VectorConformingHierarchicalMultiPatchSplineSpace.cpp
             validateMatchingInterfaces()
+            src/topology/HierarchicalMultiPatchCombinatorialMap.cpp
+            initializeConstituents()
+
+   Status (2026-09-29): IN SCOPE for the trace-infrastructure unification work.
+   Arbitrary same-mesh refinement across patch interfaces must operate correctly
+   before that work is considered complete. The unified trace layer is not to be
+   landed with this limitation outstanding. Related: items 7 and 10.
 
    The current implementation requires that the leaf element sets on both sides
    of every patch interface match exactly at every refinement level. This rejects
@@ -26,36 +119,94 @@ MEDIUM PRIORITY — Architectural / Correctness
    logic appears structured to produce this behavior, but the vector-conforming
    path rejects the configuration before it can be tested.
 
-   Action: Relax validateMatchingInterfaces to permit asymmetric leaf selection
-   when both patches share the same underlying mesh structure at all levels. Add
-   a test verifying: coarse merged interface DOF active, fine interior DOFs
-   active, correct DOF count, extraction operator includes coarse merged DOF
-   contribution on the fine patch's interface elements, and H(div)/H(curl)
-   trace conformity is preserved through the surviving coarse merged function.
+   Second gate: MEASURED ABSENT (2026-09-29). This entry previously recorded a
+   coercion in the HierarchicalMultiPatchCombinatorialMap constructor as a
+   second gate that would rewrite leaf status before validation ran. Experiment
+   A disproves that for the same-mesh asymmetric case: the requested and
+   effective leaf sets are identical at every level, dart set for dart set (see
+   PHASE 0 RESULTS). Whatever coercion code exists does not fire for this
+   configuration. Item 1 therefore has a single gate WITHIN THE TESTED SCOPE, in
+   the vector-conforming path. Relaxing that validation makes the configuration
+   CONSTRUCTIBLE only. It does not establish that active-function pruning or
+   extraction is correct across the asymmetric interface, and that correctness -
+   not constructibility - is the substantive content of item 1.
+
+   Action:
+     a. DONE (2026-09-29, Experiment A). leafElements() returns the requested
+        leaf sets unchanged, so the rejection is not coercion-induced. This is a
+        validation relaxation, not a topology-policy change. The scalar H1 space
+        builds; only the vector-conforming builders reject the configuration.
+     b. No coercion relaxation appears to be required. Re-confirm in 3D and with
+        more than two patches before closing this sub-step.
+     c. Relax validateMatchingInterfaces to permit asymmetric leaf selection when
+        both patches share the same underlying mesh structure at all levels.
+     d. Add an ALGEBRAIC test verifying: coarse merged interface DOF active,
+        fine interior DOFs active, correct DOF count, and that the extraction
+        operator includes the coarse merged DOF contribution on the fine
+        patch's interface elements. Algebraic evidence only - extraction rows
+        and connectivity, no quadrature. This step completes long before any
+        physical trace machinery exists.
+     e. Defer PHYSICAL H(div)/H(curl) trace conformity to Phase 7, once the
+        evaluator and quadrature exist. State the H(div) check explicitly as
+        (u_A . n_A) + (u_B . n_B) = 0 on the shared interface. Do not cite this
+        as evidence for (d).
+     f. Once (a)-(e) hold, cross-patch coarse-fine interfaces become
+        representable and must be enumerated by patchTraceMeshInterfaces
+        alongside the same-patch work in item 7.
 
    Note: This change requires careful verification of the THB-spline extraction
    across the asymmetric interface before merging.
 
+   Note: The scalar HierarchicalMultiPatchSplineSpace performs no interface
+   validation (level-count and constituent-count checks only), so the scalar and
+   vector paths currently disagree about which configurations are legal.
+
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces
-   File(s): src/basis/MultiPatchSplineSpace.cpp
+   File(s): src/basis/TraceMesh.cpp  traceInterfaceElement()
+            src/basis/MultiPatchSplineSpace.cpp
+            src/topology/MultiPatchCombinatorialMap.cpp
             src/basis/VectorConformingMultiPatchSplineSpace.cpp
-            test/MultiPatchSplineFactory_test.cpp
+            test/Phase0_Characterization_test.cpp
 
-   For a Flip1d interface with multiple elements in the tangential direction, the
-   current multipatch H1 space shows correct aggregate DOF sharing across the
-   whole interface, but each topologically paired element does not exhibit
-   complete local DOF overlap. Element (t=0) on patch 0 is topologically paired
-   with element (t=N-1) on patch 1 under Flip1d. The corresponding H(div)/H(curl)
-   per-element behavior still needs to be verified explicitly.
+   Status (2026-09-29): MEASURED. The defect is larger and differently located
+   than this entry recorded. It is not merely that trace side data omits a
+   permutation: the DOF merge and the element pairing use OPPOSITE conventions.
 
-   This will matter for Phase 5B physical trace evaluation: when evaluating the
-   conforming flux at a flipped interface, quadrature points must be permuted
-   before comparing traces, and the DOF map must account for the flip at the
-   element level.
+   Measured (Experiment B). patchTraceMeshInterfaces pairs elements correctly
+   under Flip1d, i.e. reversed: element t=0 on patch 0 pairs with t=N-1 on
+   patch 1. The merge does not follow suit - patch 1's tangential function k is
+   merged with patch 0's function k rather than N-1-k. On a mirrored asymmetric
+   interface (patch 0 t-element sizes [1,2] against patch 1 [2,1]) the merge
+   still glues patch 0's size-1 element to patch 1's size-2 element, and
+   construction nonetheless succeeds. Consequence: a paired element shares 1 of
+   3 functions on a palindromic fixture, 2 of 3 on the mirrored asymmetric one.
 
-   Action: Verify or fix per-element DOF alignment under Flip1d before writing
-   Phase 5B H(div)/H(curl) interface trace agreement tests.
+   Separately, traceInterfaceElement applies no permutation at all when building
+   TraceInterfaceElement, so even with a corrected merge the trace column order
+   would still require alignment, and TraceSideData carries no ordering field in
+   which to express it.
+
+   Scope is wider than Flip1d. The four 3D permutations involve axis swaps.
+   Measurement shows ZeroToOne and ZeroToThree agree under neither identity nor
+   reversed column order, and ZeroToTwo agrees for H1 under full column reversal
+   but not for H(div) or H(curl) - vector spaces need sign and direction
+   handling in addition to reordering.
+
+   Why the suite did not catch this: compatibleKnotPatterns compares knot
+   patterns under reversal but never inspects the merge, and every existing
+   fixture uses a palindromic interface knot vector, under which the identity
+   and reversed merges coincide.
+
+   Action:
+     a. SETTLED: Flip1d reversal is authoritative and the function-ID merge is
+        the inconsistent component. No convention decision remains.
+     b. Localize the identity merge to MultiPatchCombinatorialMap dart
+        identification or to the spline-space function-id merge. This determines
+        whether the fix is topological or basis level.
+     c. Fix it, using a non-palindromic interface fixture as the regression test.
+     d. Only then align trace column ordering, adding an explicit ordering field
+        to TraceSideData.
 
 
 -------------------------------------------------------------------------------
