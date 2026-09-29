@@ -5,9 +5,12 @@ deps
 scripts/*.vtu
 
 StokesFlow/
+HW14_OneD_Diffusion_ConvergenceRate_ST/
 
 build_*/
 
 docs/*.html
 docs/*_files/
 .quarto/
+
+

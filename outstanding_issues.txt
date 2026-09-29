@@ -31,6 +31,11 @@ Assertions are labelled in two classes, and the distinction is load-bearing:
               EXPERIMENT B4 is the designated regression test for the merge
               fix.
 
+CORRECTION (Stage 1, 2026-09-29): six of those labels are wrong, in both
+directions.  Four PERMANENT assertions actually pin DEFECTIVE behaviour and two
+TEMPORARY ones are convention-invariant.  See "TEST-LABEL CORRECTIONS" under
+STAGE 1 RESULTS below.  Do not rely on the two-class split as written above.
+
 Verification: 148 assertions in 6 cases, all pass; full non-slow suite 174/174
 in 123 s.
 
@@ -79,15 +84,346 @@ Experiment B - per-element cross-patch correspondence (item 2).
   ordering only: ZeroToZero agrees under identity (9/9, 4/4, 12/12); ZeroToOne
   and ZeroToThree agree under neither; ZeroToTwo agrees for H1 under full column
   reversal (9/9) but gives H(div) 0/4 and H(curl) 0/12.
-  Flip1d reversal is AUTHORITATIVE.  It is the established semantics in
-  topology, compatibility validation, trace pairing and hierarchical
-  correspondence; the function-ID merge is the one inconsistent component.
-  This is settled by the investigation, not an open design choice.  An aligned
-  2D permutation, if ever wanted, is a separate API extension and is NOT part
-  of this correction.
-  Open question for Stage 1: whether the identity correspondence originates in
-  MultiPatchCombinatorialMap dart identification, in the conversion of that
-  adjacency into tensor indices, or in the scalar/vector function-id merge.
+  WITHDRAWN BY STAGE 1 (2026-09-29).  This paragraph previously read: "Flip1d
+  reversal is AUTHORITATIVE.  It is the established semantics in topology,
+  compatibility validation, trace pairing and hierarchical correspondence; the
+  function-ID merge is the one inconsistent component.  This is settled by the
+  investigation, not an open design choice."  That attribution is INVERTED.
+  The topology and both merges are correct; the trace-side and validator
+  consumers are the defective components.  See STAGE 1 RESULTS.
+  Open question for Stage 1 - ANSWERED: the correspondence does not "originate"
+  in a defect at all.  phi's parametric-index parity is legitimately
+  side-pair-dependent, because orientation consistency requires it.  The
+  disagreement is a side-pair parity mismatch introduced by consumers that
+  reduce the correspondence to the stored permutation alone.
+
+
+-------------------------------------------------------------------------------
+STAGE 1 RESULTS — MEASURED 2026-09-29
+-------------------------------------------------------------------------------
+
+STATUS: COMPLETE.  Read-only localization stage.  No production file and no
+tracked file other than this one was modified.  Evidence is eight standalone
+probes compiled against the built libraries and kept in the session scratchpad,
+not the test suite.  Where a claim rests on printed probe output rather than an
+asserted test, it says so.
+
+HEADLINE: PHASE 0'S ATTRIBUTION IS INVERTED.  Phase 0 recorded that "Flip1d
+reversal is AUTHORITATIVE ... the function-ID merge is the one inconsistent
+component."  That is wrong.  The topology (phi) and BOTH function-ID merges are
+CORRECT.  The defective components are the trace-side and validator consumers
+that reduce the interface correspondence to the stored permutation alone:
+permuteTraceSideIndex, permuteTraceSidePoint and traceAxisTransforms.  The
+defect is in their SIGNATURES, not their arithmetic.
+
+WHY THE TOPOLOGY IS CORRECT
+
+  1. phi's cross-interface pairing is an orientation-consistent involution
+     (probe 5).  For every interface dart, in both a parity-identity gluing
+     (sides 0<->1) and a parity-reversed one (sides 0<->3):
+         phi_2(phi_2(d)) == d                   (involution)
+         onSameVertex(d, phi_2(d))        == 0
+         onSameVertex(phi_1(d), phi_2(d)) == 1
+     The last value is the decisive signature: phi_2(d) begins at the HEAD of
+     d, i.e. the same edge traversed in the opposite direction.  That is what a
+     consistently oriented map requires of two faces sharing an edge.
+
+  2. The convention is uniform with the patch interior (probe 4).
+     onSameVertex(d, phi_2(d)) is false for all 24 patch-INTERIOR edges as well
+     as all 3 interface edges, in both gluings.  The interior path is
+     TPCombinatorialMap, which is not under suspicion, so "phi_i shifts the
+     originating vertex" is the repository's own convention and the interface
+     crossing obeys it.  The scalar merge's reverse = not onSameVertex(...) and
+     the vector merge's constexpr reverse = true are therefore both right, and
+     no double reversal exists.
+
+  3. The reference paper agrees.  arXiv:2608.29545 describes inter-patch phi_n
+     as exactly the implemented drop-permute-raise, states that "the phi_i
+     operator shifts both the originating vertex and the i-dimensional cell ...
+     while leaving all other cells constant", that adjacent cells traverse
+     their shared boundary in opposite directions, and that there is "only one
+     permutation in the 1d side of a 2d patch".  That last point vindicates the
+     hardcoded Flip1d at MultiPatchCombinatorialMap.cpp:215-216: in 2D the
+     stored permutation carries NO information, so no consumer can derive the
+     correspondence from it alone.
+
+  CAUTION for future work: onSameVertex (CombinatorialMapMethods.cpp:481) is a
+  LocalCellMarker over Vertex orbits, i.e. it reads the same phi under
+  examination.  Merge/vertex agreement is tautological and is NOT evidence.  An
+  earlier draft of this investigation briefly treated it as an oracle.
+
+THE ACTUAL DEFECT: SIDE-BLIND CONSUMERS
+
+  flipNecessaryDarts (MultiPatchCombinatorialMap.cpp:35-58) is applied twice per
+  crossing, in dropToBoundary:137 and in raiseFromBoundary:174.  Its input is
+  unflattenFull(...).unflat_darts, i.e. an already-PARAMETRIC element index, so
+  it converts parametric index into index along the induced (CCW) boundary
+  traversal.  In 2D it flips boundaries 1 and 2, exactly the two whose CCW
+  traversal opposes increasing parameter; the dart tables at :27-29 give the CCW
+  order local darts 0,1,2,3 -> bdry 3,0,2,1 -> bottom, right, top, left.
+
+  So phi computes  F_b o P o F_a  in parametric index space, where F_s is the
+  per-side canonicalization and P is permuteAcrossBoundary.  Every trace-side
+  consumer computes P alone.
+
+  2D RULE (probes 1, 3 and 6; probe 3 covers all 16 ordered side pairs).
+    phi reverses the parametric element index iff
+        [a in {1,2}] + [b in {1,2}]  is EVEN.
+    permuteTraceSideIndex reverses unconditionally.  They agree on 8 of the 16
+    ordered pairs and disagree on the other 8:
+      AGREE     0<->0  0<->3  1<->1  1<->2  2<->1  2<->2  3<->0  3<->3
+      DISAGREE  0<->1  0<->2  1<->0  1<->3  2<->0  2<->3  3<->1  3<->2
+    Corrected 2D transform: reverse iff [a in {1,2}] + [b in {1,2}] is even,
+    equivalently aligned = ([a in {1,2}] + [b in {1,2}]) is odd.
+
+  3D RULE (probe 7: 120 gluings built through the PRODUCTION dart-pair
+  constructor, so permutations are DERIVED by initializeInterMapConnections and
+  not hand-picked).
+    permuteTraceSideIndex's four 3D cases are character-for-character identical
+    to permuteAcrossBoundary's, so the trace reproduces the permute step exactly
+    and omits precisely the two flipNecessaryDarts applications.  With F_s =
+    flip tangential axis 0 iff s in {0,3,4} - the 3D branch's set, which DIFFERS
+    from 2D's {1,2} - agreement holds iff F_b o P o F_a == P:
+      g(a)=g(b)=0  (both in {1,2,5})  -> AGREE for every permutation
+      g(a) != g(b)                    -> DISAGREE for every permutation
+      g(a)=g(b)=1  (both in {0,3,4})  -> AGREE iff P preserves axis 0, i.e.
+                                         ZeroToZero or ZeroToTwo; DISAGREE for
+                                         ZeroToOne and ZeroToThree
+    Measured: 45 fully agreeing, 75 partially disagreeing, 0 fully disagreeing.
+    All 120 rows fit the rule.
+    3D is WORSE than 2D, not merely analogous, because the failure is PARTIAL.
+    On a 3x3 interface grid the two maps differ by a grid symmetry that always
+    has fixed points - 1 of 9 agree under a 180-degree rotation, 3 of 9 under an
+    axis swap - so per-element shared counts come out NONZERO BUT WRONG.  There
+    is no configuration in which the symptom is total absence of sharing.
+
+WHY NO EXISTING TEST CAUGHT IT - THREE INDEPENDENT MASKING MECHANISMS
+
+  1. Palindromic interface knot vectors (Phase 0's finding).  Identity and
+     reversed merges coincide.
+  2. Count invariance.  numFunctions is the SAME under both conventions in every
+     configuration measured: probe 3 reports 45 from raw 50 for all 16 2D side
+     pairs; probe 1 reports 25 for the agreeing and the disagreeing gluing
+     alike.  No count-based assertion can EVER discriminate.  The visible
+     symptom is per-paired-element shared sets: with 5 tangential functions a
+     reversal fixes only the middle index, so a wrong-convention merge still
+     merges 5 functions while sharing only 1 per paired element (surviving id
+     10, the middle).
+  3. test_c0 evaluates at the reversal's FIXED POINT.  Both the scalar
+     (MultiPatchSplineSpace_test.cpp:15-70) and vector
+     (VectorConformingMultiPatchSplineSpace_test.cpp:36-101) helpers derive each
+     side's parent point from pointOnBoundary(cubeDomain(dim),
+     parentDomainBoundary(atlas, side_e)).  ParentPoint.cpp:48 sets each
+     non-zero coordinate to 1/num_group_nonzero_coords, which is 0.5 along an
+     edge's free axis.  Probe 5 measured the point as [1, 0.5] in all six cases:
+     the edge MIDPOINT, where identity and reversed correspondence agree
+     exactly.  Both helpers also locate the other side with
+     phi(cmap, cmap.dim(), d) and compare only connectivity entries the merge
+     already declared shared, so they are self-consistent with whatever phi and
+     the merge jointly do.
+  Additionally the vector tests assemble geometry through
+  multiPatchCoefficients(geom_ss, ...), i.e. through the merge itself, so they
+  can be self-consistent without being independently correct.
+
+  CONSEQUENCE: the vector shared_ids == 0 recorded in Phase 0 is EXPLAINED, not
+  a helper bug.  The H(div) normal component has an EVEN number of tangential
+  functions, whose reversal has no fixed point; 0 is the even-length analogue of
+  the scalar's 1.  The identical helper returns 2 on the agreeing control.
+
+TEST-LABEL CORRECTIONS REQUIRED IN test/Phase0_Characterization_test.cpp
+
+  Every Phase 0 fixture glues twoPatchConnection(ElementSide(0,false),
+  ElementSide(0,true), ...) = sides 0<->1, which is in the DISAGREEING class in
+  2D and, for makeVolume, disagreeing for all four 3D permutations (probe 8).
+  The existing 3D vector fixture {{0,Dart(1)},{1,Dart(19)}} derives sides
+  3<->1 with ZeroToZero, g(3)=1 g(1)=0, also disagreeing (probe 8).  No current
+  3D test sits on the agreeing side of the line, and all of them pass.
+
+  Mislabelled PERMANENT - these pin DEFECTIVE behaviour:
+    - B3's REQUIRE_THROWS_AS / REQUIRE_THROWS_WITH.  At sides 0<->1 the correct
+      parametric correspondence is IDENTITY, so a patch glued to itself across
+      an identical non-palindromic interface matches span for span and is
+      COMPATIBLE.  Probe 6 confirms the validator throws on it today
+      ("Patch 0 axis 1 is incompatible with patch 1 axis 1").  After the fix B3
+      must CONSTRUCT.
+    - B4's "PERMANENT: pairing is reversed here too" block, asserting
+      o.dart_b == dartOf(mp, 1, 1 - t).  That is the trace pairing, the
+      defective one.  Probe 6 measures phi pairing p0 elem t=0 -> p1 elem (0,0)
+      and t=1 -> (0,1): IDENTITY.
+    - B4's "PERMANENT: the fixture is the discriminating one" reasoning, that
+      reversed pairing couples equal spans.  True as arithmetic, but it is the
+      wrong pairing for this side pair.
+    - The label-block phrases "reversed Flip1d pairing" and "B3's rejection of a
+      self-glued non-palindromic patch" as PERMANENT invariants.
+
+  Mislabelled TEMPORARY - these are convention-invariant and should be
+  PERMANENT:
+    - numFunctions 25 (B2) and 20 (B4).  B4 is 12 + 12 - 4 = 20 under either
+      convention, since 4 interface functions merge either way.
+
+  B4 HAS NO POST-FIX SHARED-SET VALUES TO RECORD.  At sides 0<->1 the correct
+  identity correspondence couples patch0's span-1 element to patch1's span-2
+  element, so the mirrored fixture is GEOMETRICALLY INCOMPATIBLE and a
+  side-aware validator must REJECT it.  B3 and B4 therefore SWAP outcomes: B3
+  starts passing construction, B4 starts throwing.  A replacement discriminating
+  fixture for the merge must use either sides in the agreeing class with
+  mirrored knots, or sides 0<->1 with identical knots.
+
+CONSUMER REQUIREMENTS TABLE (Stage 1 step 6)
+Each entry: information AVAILABLE at the call site / transformation PERFORMED /
+transformation NEEDED.
+
+  A. phi -> dropToBoundary / permuteAcrossBoundary / raiseFromBoundary
+     MultiPatchCombinatorialMap.cpp:31-190, dispatched from :259
+     AVAILABLE  both side ids (which_boundary at drop and at raise), both
+       patches' tangential lengths, the stored permutation, the dart position.
+     PERFORMED  F_b o P o F_a.
+     NEEDED     the same.  CORRECT.
+     Note phi(mp,2,d) == phi(mp,3,d) in 2D: the or_else branch at :259 never
+     inspects i, so the vector merge's hardcoded phi(...,3,...) does execute
+     correctly in 2D and sees the same neighbour dart as the scalar path.
+
+  B. getIterVars   MultiPatchSplineSpace.cpp:151
+     AVAILABLE  the constituent, the corner cell, a reverse flag.
+     PERFORMED  per-axis iteration order and direction from the parent-domain
+       boundary; for cell_dim 1, direction = reverse != mBaryCoordIsZero; for
+       cell_dim 2, param::getFrame.
+     NEEDED     the same.  CORRECT, and faithful relative to the cmap.
+     Double-reversal check (probe 2): the collinear gluing's dim-1 call gives
+       this [fix:2,dir:up] against other [fix:0,dir:up] - reverse=1 WAS applied
+       and both still iterate the same direction, because the unreversed
+       directions already differed.  The rotated gluing gives up against dn, a
+       genuine reversal.  No double reversal.
+
+  C. scalar function-ID merge   MultiPatchSplineSpace.cpp:247-347
+     AVAILABLE  glob_corner_cell, the neighbour from iterateAdjacentCells,
+       reverse from onSameVertex, both constituents.  connection.first is never
+       read - correctly, since in 2D it carries no information.
+     PERFORMED  synchronized tensor iteration over both sides.
+     NEEDED     the same.  CORRECT.  Loops cell_dim 0 .. param_dim-1.
+
+  D. vector function-ID merge   VectorConformingMultiPatchSplineSpace.cpp:58
+     AVAILABLE  the same, plus coordinateTransform and per-component offsets.
+     PERFORMED  the same, with component mapping from
+       coordinateTransform(atlas, glob_corner_cell).at(vec_comp) and sign via
+       UnionFind::unite(..., aligned).
+     NEEDED     the same.  CORRECT.
+     coordinateTransform (ParametricAtlas.cpp:120) derives the component map and
+       alignment from getFrame on BOTH sides via phi, comparing actual
+       parent-point coordinate changes.  It never reads the permutation enum, so
+       it is correct by construction and is NOT implicated.  Probe 2 measured
+       the expected swap for the rotated gluing: (comp->1,aligned=1) and
+       (comp->0,aligned=0) for H(div).
+     SEPARATE LIMITATION, not the parity defect: this merge uses
+       cell_dim = multi_cmap.dim() - 1 ONLY, so in 2D it merges across edges but
+       never across vertices, while the scalar merge loops 0 .. param_dim-1.
+       Needs its own assessment.
+
+  E. permuteTraceSideIndex   TraceMesh.cpp:199
+     called from TraceMesh.cpp:295 and
+     VectorConformingHierarchicalMultiPatchSplineSpace.cpp:127
+     AVAILABLE  at the function: index, lengths, permutation - NO side ids.  At
+       both call sites: first_side and second_side are in scope and not passed.
+     PERFORMED  P alone, on a parametric index (sideIndex reads
+       unflattenFull(...).unflat_darts.at(axis).id()).
+     NEEDED     F_b o P o F_a, which requires both side ids.  DEFECTIVE, and the
+       defect is in the SIGNATURE: it cannot be corrected without changing the
+       parameter list.
+     test/TraceMesh_test.cpp:151 pins the unconditional flip directly -
+       permuteTraceSideIndex({0},{3},Flip1d) == {2} - with no side context, so
+       that unit test ENCODES the defective signature and must change with it.
+
+  F. permuteTraceSidePoint   TraceMesh.cpp:226
+     AVAILABLE  point, permutation - no side ids.
+     PERFORMED  1.0 - point(0) for Flip1d, unconditionally.
+     NEEDED     the same conditioning as E, in point space.  DEFECTIVE.
+     Pinned by test/TraceMesh_test.cpp:152 and :165-171.
+
+  G. traceAxisTransforms / compatibleKnotPatterns
+     MultiPatchSplineSpace.cpp:23, consumed by
+     validateStrongInterfaceCompatibilityImpl at :117
+     AVAILABLE  at the function: dim and permutation.  At the call site:
+       first_side.side_id and second_side.side_id, which the SAME loop already
+       uses for tangentialAxes(dim, side_id).
+     PERFORMED  returns { {0, false} } in 2D - aligned = false, i.e. reversed,
+       unconditionally.  compatibleKnotPatterns then compares knot patterns
+       reversed.
+     NEEDED     aligned = ([a in {1,2}] + [b in {1,2}]) is odd in 2D, and the 3D
+       analogue.  DEFECTIVE.  The axis-selection half of this loop is side-aware
+       while the orientation half is side-blind, in the same loop body.
+     This is the validator added in commit c4980b4, which is why B3 and B4's
+       verdicts are backwards.
+
+  H. patchTraceMeshInterfaces   TraceMesh.cpp:276
+     AVAILABLE  both ConstituentSides, both cmaps, leaf elements.
+     PERFORMED  pairs elements via E.
+     NEEDED     correct once E is corrected.  Not independently defective.
+
+  I. hierarchical leaf check
+     VectorConformingHierarchicalMultiPatchSplineSpace.cpp:109-132
+     AVAILABLE  both sides, both leaf sets.
+     PERFORMED  permutes first_indices via E, then compares leaf sets.
+     NEEDED     correct once E is corrected.  This is item 1's gate, so items 1
+       and 2 are COUPLED through E - a corrected transform changes which
+       asymmetric configurations are rejected.
+
+  J. connectionsOfSweptMultipatch   MultiPatchCombinatorialMap.cpp:419
+     AVAILABLE  the 2D connections, hence both 2D side ids.
+     PERFORMED  emits ZeroToZero for EVERY swept 2D connection, with the comment
+       "All constituents have the same orientation in this situation."
+     NEEDED     assessment.  Since 2D side pairs split into two parity classes, a
+       2D gluing of sides 0<->1 and one of 0<->3 cannot both correctly map to
+       ZeroToZero.  This is a CONSTRUCTION-side instance of the same
+       side-blindness, separate from the consumer defect.  Reached from
+       SweepAPIMethods.cpp:492 and SphereFoliation_test.cpp:608 and :851.
+
+  NOT IMPLICATED
+    - traceColumnIndices (TraceExtraction.cpp:48 and :73): side-aware,
+      permutation-free, purely local per-element column selection.  This RETIRES
+      the earlier suspicion recorded against it.
+    - TraceMesh.cpp:259 connections().contains({patch_id, side_id}): boundary
+      detection only.
+    - UnionFind::unite orientation bookkeeping (UnionFind.hpp:19): consistent.
+
+WHAT STAGE 2 MUST DO
+
+  1. Decide where the side-aware interface transform lives.  It needs both side
+     ids and the permutation, and is needed in at least four places (E, F, G and
+     the 3D analogue).  One shared helper is the obvious shape; phi already
+     computes it internally and could expose it rather than duplicating it.
+  2. Change the signatures of permuteTraceSideIndex, permuteTraceSidePoint and
+     traceAxisTransforms to take both ConstituentSides.  Update
+     test/TraceMesh_test.cpp:151-171 atomically.
+  3. Swap B3 and B4's expected outcomes and correct the six mislabelled Phase 0
+     assertions, atomically with 2.
+  4. Build 3D fixtures that DISCRIMINATE.  From probe 7: at least 2 elements
+     along BOTH tangential axes, non-palindromic and mutually distinct knot
+     patterns, and a side pair from a disagreeing class.  A 3x3 grid separates
+     the three symmetry classes by agreement count (9/9, 3/9, 1/9).  The current
+     3D fixtures carry one element per interface axis, so no reversal or axis
+     swap can change which element pairs with which.
+  5. Assess J independently.
+  6. Assess D's cell_dim = dim-1 restriction independently.
+
+SCOPE LIMITS - WHAT STAGE 1 DOES NOT ESTABLISH
+
+  - No physical conformity was tested.  All evidence is index correspondence,
+    connectivity and extraction algebra.  Quadrature-based conformity stays
+    deferred to Phase 7.
+  - Probe 7 used uniform multi-element knots so the validator stayed quiet and
+    element correspondence was the only variable.  It therefore measures the
+    phi-vs-trace disagreement in 3D, NOT the 3D knot-compatibility verdicts.
+  - Nothing is established for more than two patches, for a patch participating
+    in several interfaces, or for hierarchical refinement beyond item 1's tested
+    configuration.
+  - The reference paper (arXiv:2608.29545) has been checked against the full
+    PDF, not merely a fetched summary, and the quoted claims are present as
+    quoted.  The code probes nevertheless remain the PRIMARY evidence: every
+    claim attributed to the paper above is independently corroborated by probe 4
+    or probe 5, and the paper corroborates the implementation rather than
+    standing in for measurement.
+  - These findings come from printed probe output, not from asserted tests.
+    Nothing here is regression-protected until Stage 2 encodes it.
 
 
 MEDIUM PRIORITY — Architectural / Correctness
@@ -169,13 +505,27 @@ MEDIUM PRIORITY — Architectural / Correctness
             src/basis/VectorConformingMultiPatchSplineSpace.cpp
             test/Phase0_Characterization_test.cpp
 
+   Status (2026-09-29, REVISED BY STAGE 1): MEASURED, and the attribution in
+   the superseded text below is INVERTED.  The topology (phi) and both
+   function-ID merges are CORRECT; the defective components are
+   permuteTraceSideIndex, permuteTraceSidePoint and traceAxisTransforms, which
+   reduce the interface correspondence to the stored permutation alone and so
+   cannot be correct in 2D, where that permutation is a constant.  The defect is
+   in their SIGNATURES, not their arithmetic.  See STAGE 1 RESULTS for the 2D and
+   3D rules, the consumer table, and the six Phase 0 test labels that are wrong.
+
+   SUPERSEDED TEXT follows, kept as the record of what was believed before
+   Stage 1.  Its description of WHICH component does WHAT is accurate; its
+   assignment of blame is not.
+
    Status (2026-09-29): MEASURED. The defect is larger and differently located
    than this entry recorded. It is not merely that trace side data omits a
    permutation: the DOF merge and the element pairing use OPPOSITE conventions.
 
-   Measured (Experiment B). patchTraceMeshInterfaces pairs elements correctly
-   under Flip1d, i.e. reversed: element t=0 on patch 0 pairs with t=N-1 on
-   patch 1. The merge does not follow suit - patch 1's tangential function k is
+   Measured (Experiment B). patchTraceMeshInterfaces pairs elements reversed
+   under Flip1d [STAGE 1: INCORRECTLY so for these fixtures' side pair]:
+   element t=0 on patch 0 pairs with t=N-1 on patch 1. The merge does not follow
+   suit [STAGE 1: CORRECTLY does not] - patch 1's tangential function k is
    merged with patch 0's function k rather than N-1-k. On a mirrored asymmetric
    interface (patch 0 t-element sizes [1,2] against patch 1 [2,1]) the merge
    still glues patch 0's size-1 element to patch 1's size-2 element, and
@@ -196,17 +546,38 @@ MEDIUM PRIORITY — Architectural / Correctness
    Why the suite did not catch this: compatibleKnotPatterns compares knot
    patterns under reversal but never inspects the merge, and every existing
    fixture uses a palindromic interface knot vector, under which the identity
-   and reversed merges coincide.
+   and reversed merges coincide.  STAGE 1 adds two further masking mechanisms
+   that matter more, because they defeat NON-palindromic fixtures too: function
+   COUNTS are convention-invariant in every configuration measured, and test_c0
+   evaluates both sides at the edge midpoint, which is the reversal's fixed
+   point.  See STAGE 1 RESULTS.
 
-   Action:
-     a. SETTLED: Flip1d reversal is authoritative and the function-ID merge is
-        the inconsistent component. No convention decision remains.
-     b. Localize the identity merge to MultiPatchCombinatorialMap dart
-        identification or to the spline-space function-id merge. This determines
-        whether the fix is topological or basis level.
-     c. Fix it, using a non-palindromic interface fixture as the regression test.
-     d. Only then align trace column ordering, adding an explicit ordering field
+   Action (REVISED BY STAGE 1):
+     a. SETTLED, OPPOSITE to the original entry: phi is authoritative and the
+        trace/validator consumers are the inconsistent components.  phi is
+        verified as an orientation-consistent involution, uniform with the
+        patch-interior convention, and consistent with arXiv:2608.29545.
+     b. DONE (Stage 1): localized to the side-blind consumers E, F and G of the
+        STAGE 1 consumer table.  The defect is in consumers ABOVE the existing
+        phi implementation; phi's behaviour should not change.  Where the shared
+        transform is PLACED remains a Stage 2 design decision: it may properly
+        live in the topology layer and be exposed to the basis and trace
+        consumers, since phi already computes it internally.  "Not topological"
+        would be the wrong conclusion to draw - unchanged behaviour is not the
+        same as unchanged layer.
+     c. Give the interface transform both side ids.  2D: reverse iff
+        [a in {1,2}] + [b in {1,2}] is even.  3D: F_b o P o F_a with F_s
+        flipping tangential axis 0 iff s in {0,3,4}.  Prefer one shared helper
+        over four copies.
+     d. Swap B3's and B4's expected outcomes and correct the six mislabelled
+        Phase 0 assertions, atomically with c.  A non-palindromic fixture is
+        necessary but NOT sufficient as a regression test - it must also use a
+        side pair in a disagreeing class and assert per-element shared sets,
+        since counts are invariant.
+     e. Only then align trace column ordering, adding an explicit ordering field
         to TraceSideData.
+     f. Separately assess connectionsOfSweptMultipatch (consumer J) and the
+        vector merge's cell_dim = dim-1 restriction (consumer D).
 
 
 -------------------------------------------------------------------------------
