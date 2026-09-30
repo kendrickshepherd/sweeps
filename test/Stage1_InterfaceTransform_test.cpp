@@ -1,23 +1,21 @@
 // Stage 1 evidence, converted from scratchpad probes into executable gates.
 // See outstanding_issues.txt, STAGE 1 RESULTS.
 //
-// Every test here is PERMANENT.  Three of them additionally carry
-// [known-defect][!shouldfail], and that tag is the only thing Stage 2 removes:
+// Every test here is PERMANENT.  Three of them were written as
+// [known-defect][!shouldfail] requirements; Stage 2's side-aware consumers
+// removed the TAG, never the case:
 //
-//   untagged      - invariants that hold today.  phi and both function-ID
-//                   merges are CORRECT, so what phi produces is pinned
-//                   directly.  These must keep passing after Stage 2,
-//                   INCLUDING after the shared transform is relocated
-//                   (possibly into the topology layer).
+//   invariants   - phi and both function-ID merges are CORRECT, so what phi
+//                  produces is pinned directly.  These must keep passing,
+//                  INCLUDING after the shared transform is relocated
+//                  (possibly into the topology layer).
 //
-//   [!shouldfail] - the REQUIREMENT that the trace and validator consumers
-//                   agree with phi.  Catch2 inverts the verdict, so the case
-//                   is green while the defect stands and turns RED the moment
-//                   Stage 2 fixes it, forcing removal of the tag.  Remove the
-//                   TAG, never the test: it guards a lower layer than the
-//                   Stage 2 spline fixtures will.
+//   requirements - that the trace and validator consumers agree with phi.
+//                  While the consumers were side-blind these carried
+//                  [!shouldfail] so Catch2 inverted the verdict.  They guard
+//                  the transform at a lower layer than the spline fixtures.
 //
-// Each [!shouldfail] case contains exactly ONE aggregate assertion, so a
+// Each of those three cases contains exactly ONE aggregate assertion, so a
 // partial fix cannot hide behind another still-failing row - the single
 // failure message enumerates every case that remains wrong.  That is why the
 // loops in those cases record problems into a list instead of asserting.
@@ -34,13 +32,16 @@
 #include <MultiPatchCombinatorialMap.hpp>
 #include <MultiPatchSplineFactory.hpp>
 #include <ParametricAtlas.hpp>
+#include <SideCoordinateTransform.hpp>
 #include <TPCombinatorialMap.hpp>
 #include <TPParametricAtlas.hpp>
 #include <TraceMesh.hpp>
+#include <cmath>
 #include <map>
 #include <optional>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -235,6 +236,19 @@ namespace
               makePatch( { kv_s, mirrored ? kv_b : kv_a }, { 2, 2 } ) },
             conn2d( 0, 1, TPPermutation::Flip1d ) );
     }
+
+    // Side pairs whose F_b o P o F_a equals P, so the values the cases below
+    // were pinned against are unchanged by the side-aware signature.
+    SideCoordinateTransform permP3d( const TPPermutation p )
+    {
+        return sideCoordinateTransform( 3, 1, 2, p );
+    }
+
+    SideCoordinateTransform permP2d()
+    {
+        return sideCoordinateTransform( 2, 0, 3, TPPermutation::Flip1d );
+    }
+
 }
 
 // ===================== map semantics: these hold today =========================
@@ -379,7 +393,7 @@ TEST_CASE( "trace side index transform is a bijection preserving bounds" )
             {
                 for( size_t j = 0; j < lengths.at( 1 ); j++ )
                 {
-                    const std::vector<size_t> out = permuteTraceSideIndex( { i, j }, lengths, p );
+                    const std::vector<size_t> out = permuteTraceSideIndex( permP3d( p ), { i, j }, lengths );
                     REQUIRE( out.size() == 2 );
                     CHECK( out.at( 0 ) < lengths.at( 0 ) );
                     CHECK( out.at( 1 ) < lengths.at( 1 ) );
@@ -396,7 +410,7 @@ TEST_CASE( "trace side index transform is a bijection preserving bounds" )
         std::set<std::vector<size_t>> images;
         for( size_t i = 0; i < n; i++ )
         {
-            const std::vector<size_t> out = permuteTraceSideIndex( { i }, { n }, TPPermutation::Flip1d );
+            const std::vector<size_t> out = permuteTraceSideIndex( permP2d(), { i }, { n } );
             REQUIRE( out.size() == 1 );
             CHECK( out.at( 0 ) < n );
             images.insert( out );
@@ -419,7 +433,7 @@ TEST_CASE( "axis-swapping permutations draw each output axis from the other inpu
         std::set<size_t> out0, out1;
         for( size_t i = 0; i < lengths.at( 0 ); i++ )
         {
-            const std::vector<size_t> out = permuteTraceSideIndex( { i, 2 }, lengths, p );
+            const std::vector<size_t> out = permuteTraceSideIndex( permP3d( p ), { i, 2 }, lengths );
             REQUIRE( out.size() == 2 );
             out0.insert( out.at( 0 ) );
             out1.insert( out.at( 1 ) );
@@ -429,8 +443,8 @@ TEST_CASE( "axis-swapping permutations draw each output axis from the other inpu
     }
 
     // The pure swap carries values across untouched, whatever the extents are.
-    CHECK( permuteTraceSideIndex( { 1, 4 }, { 4, 5 }, TPPermutation::ZeroToThree ) == std::vector<size_t>{ 4, 1 } );
-    CHECK( permuteTraceSideIndex( { 1, 3 }, { 5, 4 }, TPPermutation::ZeroToThree ) == std::vector<size_t>{ 3, 1 } );
+    CHECK( permuteTraceSideIndex( permP3d( TPPermutation::ZeroToThree ), { 1, 4 }, { 4, 5 } ) == std::vector<size_t>{ 4, 1 } );
+    CHECK( permuteTraceSideIndex( permP3d( TPPermutation::ZeroToThree ), { 1, 3 }, { 5, 4 } ) == std::vector<size_t>{ 3, 1 } );
 }
 
 TEST_CASE( "trace side transforms are involutions on square interfaces" )
@@ -446,18 +460,18 @@ TEST_CASE( "trace side transforms are involutions on square interfaces" )
         {
             for( size_t j = 0; j < lengths.at( 1 ); j++ )
             {
-                const std::vector<size_t> once = permuteTraceSideIndex( { i, j }, lengths, p );
-                CHECK( permuteTraceSideIndex( once, lengths, p ) == std::vector<size_t>{ i, j } );
+                const std::vector<size_t> once = permuteTraceSideIndex( permP3d( p ), { i, j }, lengths );
+                CHECK( permuteTraceSideIndex( permP3d( p ), once, lengths ) == std::vector<size_t>{ i, j } );
             }
         }
         const Eigen::Vector2d pt( 0.2, 0.7 );
-        CHECK( ( permuteTraceSidePoint( permuteTraceSidePoint( pt, p ), p ) - pt ).norm() < 1e-14 );
+        CHECK( ( permuteTraceSidePoint( permP3d( p ), permuteTraceSidePoint( permP3d( p ), pt ) ) - pt ).norm() < 1e-14 );
     }
 
     for( size_t i = 0; i < n_elem; i++ )
     {
-        const std::vector<size_t> once = permuteTraceSideIndex( { i }, { n_elem }, TPPermutation::Flip1d );
-        CHECK( permuteTraceSideIndex( once, { n_elem }, TPPermutation::Flip1d ) == std::vector<size_t>{ i } );
+        const std::vector<size_t> once = permuteTraceSideIndex( permP2d(), { i }, { n_elem } );
+        CHECK( permuteTraceSideIndex( permP2d(), once, { n_elem } ) == std::vector<size_t>{ i } );
     }
 }
 
@@ -480,9 +494,9 @@ TEST_CASE( "trace side index and point transforms describe the same map" )
             for( size_t j = 0; j < n; j++ )
             {
                 CAPTURE( static_cast<int>( p ), i, j );
-                const std::vector<size_t> idx = permuteTraceSideIndex( { i, j }, lengths, p );
+                const std::vector<size_t> idx = permuteTraceSideIndex( permP3d( p ), { i, j }, lengths );
                 const Eigen::VectorXd moved =
-                    permuteTraceSidePoint( Eigen::Vector2d( centreOf( i ), centreOf( j ) ), p );
+                    permuteTraceSidePoint( permP3d( p ), Eigen::Vector2d( centreOf( i ), centreOf( j ) ) );
                 REQUIRE( moved.size() == 2 );
                 CHECK_THAT( moved( 0 ), Catch::Matchers::WithinAbs( centreOf( idx.at( 0 ) ), 1e-13 ) );
                 CHECK_THAT( moved( 1 ), Catch::Matchers::WithinAbs( centreOf( idx.at( 1 ) ), 1e-13 ) );
@@ -493,8 +507,8 @@ TEST_CASE( "trace side index and point transforms describe the same map" )
     for( size_t i = 0; i < n; i++ )
     {
         CAPTURE( i );
-        const std::vector<size_t> idx = permuteTraceSideIndex( { i }, { n }, TPPermutation::Flip1d );
-        CHECK_THAT( permuteTraceSidePoint( Eigen::Vector<double, 1>( centreOf( i ) ), TPPermutation::Flip1d )( 0 ),
+        const std::vector<size_t> idx = permuteTraceSideIndex( permP2d(), { i }, { n } );
+        CHECK_THAT( permuteTraceSidePoint( permP2d(), Eigen::Vector<double, 1>( centreOf( i ) ) )( 0 ),
                     Catch::Matchers::WithinAbs( centreOf( idx.at( 0 ) ), 1e-13 ) );
     }
 }
@@ -690,11 +704,195 @@ TEST_CASE( "phi's 3d interface map is F_b o P o F_a for every side pair and perm
     CHECK( n_pairs == 144 * n_elem * n_elem );
 }
 
-// ============ requirements that the side-blind consumers currently violate ======
-// Stage 2 removes the [!shouldfail] tag from these cases.  It does not remove
-// the cases: they guard the transform itself, below the spline fixtures.
+// ---------------- the shared transform, Stage 2 step 3 ---------------------------
 
-TEST_CASE( "trace side index transform agrees with phi in 2d", "[known-defect][!shouldfail]" )
+TEST_CASE( "sideCoordinateTransform reproduces the restated interface rule exhaustively" )
+{
+    // Compared against the SAME independently restated spec the phi cases use,
+    // never against phi's output.  The phi case above pins phi to that spec on
+    // all 144 triples, so agreement with phi follows transitively and phi need
+    // not be re-extracted here.
+    const size_t n = n_elem;
+    std::vector<std::string> wrong;
+    size_t n_2d = 0, n_3d = 0;
+
+    for( size_t sa = 0; sa < 4; sa++ )
+    for( size_t sb = 0; sb < 4; sb++ )
+    {
+        n_2d++;
+        const SideCoordinateTransform t = sideCoordinateTransform( 2, sa, sb, TPPermutation::Flip1d );
+        for( size_t i = 0; i < n; i++ )
+        {
+            const std::vector<size_t> got = transformSideIndex( t, { i }, { n } );
+            const std::vector<size_t> spec{ expected2d( i, sa, sb, n ) };
+            if( got != spec )
+                wrong.push_back( "2d sides " + std::to_string( sa ) + " <-> " + std::to_string( sb ) + " at " +
+                                 std::to_string( i ) + ": transform " + describeVec( got ) + " spec " +
+                                 describeVec( spec ) );
+        }
+    }
+
+    for( size_t sa = 0; sa < 6; sa++ )
+    for( size_t sb = 0; sb < 6; sb++ )
+    for( const TPPermutation p : { TPPermutation::ZeroToZero, TPPermutation::ZeroToOne,
+                                   TPPermutation::ZeroToTwo, TPPermutation::ZeroToThree } )
+    {
+        n_3d++;
+        const SideCoordinateTransform t = sideCoordinateTransform( 3, sa, sb, p );
+        std::ostringstream os;
+        os << "3d sides " << sa << " <-> " << sb << " perm " << static_cast<int>( p );
+        for( size_t i = 0; i < n; i++ )
+        for( size_t j = 0; j < n; j++ )
+        {
+            const std::vector<size_t> got = transformSideIndex( t, { i, j }, { n, n } );
+            const std::vector<size_t> spec = expected3d( { i, j }, sa, sb, p, n );
+            if( got != spec )
+                wrong.push_back( os.str() + " at " + describeVec( { i, j } ) + ": transform " +
+                                 describeVec( got ) + " spec " + describeVec( spec ) );
+        }
+    }
+
+    INFO( "transform departs from the restated rule on " << joined( wrong ) );
+    CHECK( wrong.empty() );
+    CHECK( n_2d == 16 );
+    CHECK( n_3d == 144 );
+}
+
+TEST_CASE( "the shared transform reports the destination shape on non-square sides" )
+{
+    // What a source-lengths-only signature cannot express.  The old arithmetic
+    // is sound on non-square sides - each flip already uses its own axis's
+    // extent - but the caller has nothing to compare the destination lattice
+    // against, so a non-conforming interface cannot be detected.  Every flip
+    // touching the value from source axis s uses n_s, which is also the extent
+    // of the destination axis it lands on, so the parity composition holds
+    // when the two extents differ.
+    const std::vector<size_t> src{ 4, 5 };
+    std::vector<std::string> wrong;
+
+    for( size_t sa = 0; sa < 6; sa++ )
+    for( size_t sb = 0; sb < 6; sb++ )
+    for( const TPPermutation p : { TPPermutation::ZeroToZero, TPPermutation::ZeroToOne,
+                                   TPPermutation::ZeroToTwo, TPPermutation::ZeroToThree } )
+    {
+        const SideCoordinateTransform t = sideCoordinateTransform( 3, sa, sb, p );
+        const std::vector<size_t> dst = transformedExtents( t, src );
+        std::ostringstream os;
+        os << "sides " << sa << " <-> " << sb << " perm " << static_cast<int>( p );
+
+        const bool swaps = p == TPPermutation::ZeroToOne or p == TPPermutation::ZeroToThree;
+        const std::vector<size_t> want =
+            swaps ? std::vector<size_t>{ src.at( 1 ), src.at( 0 ) } : src;
+        if( dst != want )
+            wrong.push_back( os.str() + ": destination shape " + describeVec( dst ) + " expected " +
+                             describeVec( want ) );
+
+        std::set<std::vector<size_t>> images;
+        for( size_t i = 0; i < src.at( 0 ); i++ )
+        for( size_t j = 0; j < src.at( 1 ); j++ )
+        {
+            const std::vector<size_t> got = transformSideIndex( t, { i, j }, src );
+            images.insert( got );
+            for( size_t d = 0; d < got.size(); d++ )
+                if( got.at( d ) >= dst.at( d ) )
+                    wrong.push_back( os.str() + " at " + describeVec( { i, j } ) + ": image " +
+                                     describeVec( got ) + " outside destination shape " + describeVec( dst ) );
+        }
+        if( images.size() != src.at( 0 ) * src.at( 1 ) )
+            wrong.push_back( os.str() + ": not a bijection onto the destination lattice" );
+    }
+
+    INFO( "non-square transform problems: " << joined( wrong ) );
+    CHECK( wrong.empty() );
+}
+
+TEST_CASE( "the shared transform's index and point maps describe the same map" )
+{
+    // Correction 4.  Deriving both from one record makes disagreement less
+    // likely, not impossible - the two appliers can still read
+    // source_axis_for_destination or source_axis_reversed differently - so this
+    // stays PERMANENT after the refactor.  Non-square extents included, since
+    // that is where a misread of which extent to use would show.
+    const std::vector<size_t> src{ 4, 5 };
+    const auto centreOf = []( const size_t i, const size_t n ) {
+        return ( static_cast<double>( i ) + 0.5 ) / static_cast<double>( n );
+    };
+    std::vector<std::string> wrong;
+
+    for( size_t sa = 0; sa < 6; sa++ )
+    for( size_t sb = 0; sb < 6; sb++ )
+    for( const TPPermutation p : { TPPermutation::ZeroToZero, TPPermutation::ZeroToOne,
+                                   TPPermutation::ZeroToTwo, TPPermutation::ZeroToThree } )
+    {
+        const SideCoordinateTransform t = sideCoordinateTransform( 3, sa, sb, p );
+        const std::vector<size_t> dst = transformedExtents( t, src );
+        std::ostringstream os;
+        os << "sides " << sa << " <-> " << sb << " perm " << static_cast<int>( p );
+        for( size_t i = 0; i < src.at( 0 ); i++ )
+        for( size_t j = 0; j < src.at( 1 ); j++ )
+        {
+            const std::vector<size_t> idx = transformSideIndex( t, { i, j }, src );
+            const std::vector<double> pt =
+                transformSidePoint( t, { centreOf( i, src.at( 0 ) ), centreOf( j, src.at( 1 ) ) } );
+            for( size_t d = 0; d < idx.size(); d++ )
+                if( std::abs( pt.at( d ) - centreOf( idx.at( d ), dst.at( d ) ) ) > 1e-13 )
+                    wrong.push_back( os.str() + " at " + describeVec( { i, j } ) + " axis " +
+                                     std::to_string( d ) + ": point and index disagree" );
+        }
+    }
+
+    for( size_t sa = 0; sa < 4; sa++ )
+    for( size_t sb = 0; sb < 4; sb++ )
+    {
+        const SideCoordinateTransform t = sideCoordinateTransform( 2, sa, sb, TPPermutation::Flip1d );
+        for( size_t i = 0; i < n_elem; i++ )
+        {
+            const std::vector<size_t> idx = transformSideIndex( t, { i }, { n_elem } );
+            const std::vector<double> pt = transformSidePoint( t, { centreOf( i, n_elem ) } );
+            if( std::abs( pt.at( 0 ) - centreOf( idx.at( 0 ), n_elem ) ) > 1e-13 )
+                wrong.push_back( "2d sides " + std::to_string( sa ) + " <-> " + std::to_string( sb ) +
+                                 ": point and index disagree" );
+        }
+    }
+
+    INFO( "index and point maps disagree on " << joined( wrong ) );
+    CHECK( wrong.empty() );
+}
+
+TEST_CASE( "the shared transform validates its inputs" )
+{
+    CHECK_THROWS_AS( sideCoordinateTransform( 1, 0, 0, TPPermutation::Flip1d ), std::invalid_argument );
+    CHECK_THROWS_AS( sideCoordinateTransform( 4, 0, 0, TPPermutation::ZeroToZero ), std::invalid_argument );
+    CHECK_THROWS_AS( sideCoordinateTransform( 2, 4, 0, TPPermutation::Flip1d ), std::invalid_argument );
+    CHECK_THROWS_AS( sideCoordinateTransform( 2, 0, 4, TPPermutation::Flip1d ), std::invalid_argument );
+    CHECK_THROWS_AS( sideCoordinateTransform( 3, 6, 0, TPPermutation::ZeroToZero ), std::invalid_argument );
+    CHECK_THROWS_AS( sideCoordinateTransform( 3, 0, 6, TPPermutation::ZeroToZero ), std::invalid_argument );
+    // a permutation that cannot describe an interface of that dimension
+    CHECK_THROWS_AS( sideCoordinateTransform( 2, 0, 1, TPPermutation::ZeroToZero ), std::invalid_argument );
+    CHECK_THROWS_AS( sideCoordinateTransform( 3, 0, 1, TPPermutation::Flip1d ), std::invalid_argument );
+
+    const SideCoordinateTransform t = sideCoordinateTransform( 3, 0, 1, TPPermutation::ZeroToZero );
+    CHECK_THROWS_AS( transformedExtents( t, { 3 } ), std::invalid_argument );              // rank
+    CHECK_THROWS_AS( transformedExtents( t, { 3, 0 } ), std::invalid_argument );           // positive extents
+    CHECK_THROWS_AS( transformSideIndex( t, { 0 }, { 3 } ), std::invalid_argument );       // rank
+    CHECK_THROWS_AS( transformSideIndex( t, { 3, 0 }, { 3, 3 } ), std::invalid_argument ); // index in range
+    CHECK_THROWS_AS( transformSidePoint( t, { 0.5 } ), std::invalid_argument );            // rank
+
+    // a hand-built record that is not a permutation of the tangential axes
+    SideCoordinateTransform bad;
+    bad.source_axis_for_destination.push_back( 0 );
+    bad.source_axis_for_destination.push_back( 0 );
+    bad.source_axis_reversed.push_back( false );
+    bad.source_axis_reversed.push_back( false );
+    CHECK_THROWS_AS( transformedExtents( bad, { 3, 3 } ), std::invalid_argument );
+}
+
+// ============ requirements on the trace and validator consumers ================
+// These carried [!shouldfail] while the consumers were side-blind.  Stage 2
+// removed the tag, not the cases: they guard the transform itself, below the
+// spline fixtures.
+
+TEST_CASE( "trace side index transform agrees with phi in 2d" )
 {
     const auto patch = squarePatch();
     std::vector<std::string> wrong;
@@ -719,7 +917,7 @@ TEST_CASE( "trace side index transform agrees with phi in 2d", "[known-defect][!
     CHECK( wrong.empty() );
 }
 
-TEST_CASE( "trace side index transform agrees with phi in 3d", "[known-defect][!shouldfail]" )
+TEST_CASE( "trace side index transform agrees with phi in 3d" )
 {
     // ONE aggregate assertion.  Two independent constructions feed the same
     // list, so a partial fix cannot hide behind another still-failing row:
@@ -776,7 +974,7 @@ TEST_CASE( "trace side index transform agrees with phi in 3d", "[known-defect][!
         }
         size_t agree = 0, dis = 0;
         for( const auto& [ta, tb] : from_phi )
-            ( permuteTraceSideIndex( ta, lengths, p ) == tb ) ? agree++ : dis++;
+            ( permuteTraceSideIndex( sideCoordinateTransform( 3, sa, sb, p ), ta, lengths ) == tb ) ? agree++ : dis++;
 
         if( dis == 0 ) n_full_agree++;
         else
@@ -873,13 +1071,13 @@ TEST_CASE( "trace side index transform agrees with phi in 3d", "[known-defect][!
     CHECK( wrong.empty() );
 }
 
-TEST_CASE( "strong-interface knot validation is side-aware", "[known-defect][!shouldfail]" )
+TEST_CASE( "strong-interface knot validation is side-aware" )
 {
     // Sides 0 <-> 1 have an odd flip count, so the correct correspondence is
     // IDENTITY.  A patch glued to itself across an identical non-palindromic
     // interface therefore matches span for span and is COMPATIBLE, while the
     // mirrored fixture couples span 1 to span 2 and must be REJECTED.  The
-    // validator currently reaches both opposite conclusions.
+    // former side-blind validator reached both opposite conclusions.
     std::vector<std::string> wrong;
     try
     {
@@ -895,6 +1093,6 @@ TEST_CASE( "strong-interface knot validation is side-aware", "[known-defect][!sh
         wrong.push_back( "B4 mirrored interface knots ACCEPTED, but span 1 cannot couple to span 2" );
     }
     catch( const std::exception& ) {}
-    INFO( "side-blind validation verdicts, " << joined( wrong ) );
+    INFO( "side-aware validation verdicts, " << joined( wrong ) );
     CHECK( wrong.empty() );
 }

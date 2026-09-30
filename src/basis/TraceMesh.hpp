@@ -1,6 +1,7 @@
 #pragma once
 #include <TraceExtraction.hpp>
 #include <MultiPatchCombinatorialMap.hpp>
+#include <SideCoordinateTransform.hpp>
 #include <Eigen/Core>
 #include <optional>
 #include <vector>
@@ -39,13 +40,13 @@ namespace basis
     };
 
     std::vector<size_t> permuteTraceSideIndex(
+        const topology::SideCoordinateTransform& transform,
         const std::vector<size_t>& index,
-        const std::vector<size_t>& lengths,
-        topology::MultiPatchCombinatorialMap::TPPermutation permutation );
+        const std::vector<size_t>& lengths );
 
     Eigen::VectorXd permuteTraceSidePoint(
-        const Eigen::VectorXd& point,
-        topology::MultiPatchCombinatorialMap::TPPermutation permutation );
+        const topology::SideCoordinateTransform& transform,
+        const Eigen::VectorXd& point );
 
     std::vector<TraceMeshInterface> boundaryTraceMeshInterfaces( const SplineSpace& ss );
 

@@ -115,6 +115,13 @@ namespace
                 const ElementSide second_side = elementSideFromId( second.side_id );
                 const SideIndex first_lengths =
                     sideLengths( *level_cmap.constituents().at( first.constituent_id ), first_side );
+                const SideIndex second_lengths =
+                    sideLengths( *level_cmap.constituents().at( second.constituent_id ), second_side );
+                const topology::SideCoordinateTransform transform = topology::sideCoordinateTransform(
+                    level_cmap.dim(), first.side_id, second.side_id, connection.first );
+                if( topology::transformedExtents( transform, first_lengths ) != second_lengths )
+                    throw std::invalid_argument(
+                        "VectorConformingHierarchicalMultiPatchSplineSpace requires matching leaf elements across patch interfaces." );
 
                 const std::set<SideIndex> first_indices =
                     sideLeafIndices( level_cmap, leaves.at( level_ii ), first.constituent_id, first_side );
@@ -124,7 +131,7 @@ namespace
                 std::set<SideIndex> permuted_first_indices;
                 for( const SideIndex& index : first_indices )
                 {
-                    permuted_first_indices.insert( permuteTraceSideIndex( index, first_lengths, connection.first ) );
+                    permuted_first_indices.insert( permuteTraceSideIndex( transform, index, first_lengths ) );
                 }
 
                 if( permuted_first_indices != second_indices )

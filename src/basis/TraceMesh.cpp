@@ -196,56 +196,21 @@ namespace basis
         }
     }
 
-    std::vector<size_t> permuteTraceSideIndex( const std::vector<size_t>& index,
-                                               const std::vector<size_t>& lengths,
-                                               const TPPermutation permutation )
+    std::vector<size_t> permuteTraceSideIndex( const topology::SideCoordinateTransform& transform,
+                                               const std::vector<size_t>& index,
+                                               const std::vector<size_t>& lengths )
     {
-        const auto flip = [&]( const size_t axis ) { return lengths.at( axis ) - index.at( axis ) - 1; };
-
-        if( permutation == TPPermutation::Flip1d )
-        {
-            if( index.size() != 1 )
-                throw std::runtime_error( "Flip1d trace permutation requires a one-dimensional side index." );
-            return { flip( 0 ) };
-        }
-
-        if( index.size() != 2 )
-            throw std::runtime_error( "3D trace permutation requires a two-dimensional side index." );
-
-        switch( permutation )
-        {
-            case TPPermutation::ZeroToZero: return { flip( 0 ), index.at( 1 ) };
-            case TPPermutation::ZeroToOne: return { flip( 1 ), flip( 0 ) };
-            case TPPermutation::ZeroToTwo: return { index.at( 0 ), flip( 1 ) };
-            case TPPermutation::ZeroToThree: return { index.at( 1 ), index.at( 0 ) };
-            case TPPermutation::Flip1d: break;
-        }
-        throw std::runtime_error( "Unknown trace permutation." );
+        return topology::transformSideIndex( transform, index, lengths );
     }
 
-    Eigen::VectorXd permuteTraceSidePoint( const Eigen::VectorXd& point, const TPPermutation permutation )
+    Eigen::VectorXd permuteTraceSidePoint( const topology::SideCoordinateTransform& transform,
+                                           const Eigen::VectorXd& point )
     {
-        if( permutation == TPPermutation::Flip1d )
-        {
-            if( point.size() != 1 )
-                throw std::runtime_error( "Flip1d trace permutation requires a one-dimensional side point." );
-            return Eigen::Vector<double, 1>( 1.0 - point( 0 ) );
-        }
-
-        if( point.size() != 2 )
-            throw std::runtime_error( "3D trace permutation requires a two-dimensional side point." );
-
-        Eigen::Vector2d out;
-        switch( permutation )
-        {
-            case TPPermutation::ZeroToZero: out << 1.0 - point( 0 ), point( 1 ); return out;
-            case TPPermutation::ZeroToOne: out << 1.0 - point( 1 ), 1.0 - point( 0 ); return out;
-            case TPPermutation::ZeroToTwo: out << point( 0 ), 1.0 - point( 1 ); return out;
-            case TPPermutation::ZeroToThree: out << point( 1 ), point( 0 ); return out;
-            case TPPermutation::Flip1d: break;
-        }
-        throw std::runtime_error( "Unknown trace permutation." );
+        const std::vector<double> in( point.data(), point.data() + point.size() );
+        const std::vector<double> out = topology::transformSidePoint( transform, in );
+        return Eigen::Map<const Eigen::VectorXd>( out.data(), static_cast<Eigen::Index>( out.size() ) );
     }
+
 
     std::vector<TraceMeshInterface> boundaryTraceMeshInterfaces( const SplineSpace& ss )
     {
@@ -286,13 +251,19 @@ namespace basis
                 const ElementSide first_side = elementSideFromId( first.side_id );
                 const ElementSide second_side = elementSideFromId( second.side_id );
                 const auto& first_cmap = *level.cmap->constituents().at( first.constituent_id );
+                const auto& second_cmap = *level.cmap->constituents().at( second.constituent_id );
                 const std::vector<size_t> first_lengths = sideLengths( first_cmap, first_side );
+                const std::vector<size_t> second_lengths = sideLengths( second_cmap, second_side );
+                const topology::SideCoordinateTransform transform = topology::sideCoordinateTransform(
+                    level.cmap->dim(), first.side_id, second.side_id, connection.first );
+                if( topology::transformedExtents( transform, first_lengths ) != second_lengths )
+                    throw std::invalid_argument( "Patch interface sides have mismatched element counts." );
 
                 for( const SideIndex& first_index :
                      sideLeafIndices( *level.cmap, level.leaf_elements, first.constituent_id, first_side ) )
                 {
                     const SideIndex second_index =
-                        permuteTraceSideIndex( first_index, first_lengths, connection.first );
+                        permuteTraceSideIndex( transform, first_index, first_lengths );
                     const topology::Cell first_cell =
                         levelCellOnSide( *level.cmap, first.constituent_id, first_side, first_index );
                     const topology::Cell second_cell =

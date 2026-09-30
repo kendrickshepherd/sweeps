@@ -1,6 +1,7 @@
 #include <MultiPatchSplineSpace.hpp>
 #include <CombinatorialMapMethods.hpp>
 #include <IndexOperations.hpp>
+#include <SideCoordinateTransform.hpp>
 #include <ranges>
 #include <GlobalCellMarker.hpp>
 #include <iostream>
@@ -13,36 +14,6 @@ namespace basis
     namespace
     {
         using TPPermutation = topology::MultiPatchCombinatorialMap::TPPermutation;
-
-        struct TraceAxisTransform
-        {
-            size_t destination_axis;
-            bool aligned;
-        };
-
-        std::vector<TraceAxisTransform> traceAxisTransforms( const size_t dim, const TPPermutation permutation )
-        {
-            if( dim == 2 )
-            {
-                if( permutation != TPPermutation::Flip1d )
-                    throw std::invalid_argument( "A two-dimensional patch interface requires Flip1d permutation." );
-                return { { 0, false } };
-            }
-
-            if( dim != 3 )
-                throw std::invalid_argument( "Strong multipatch coupling is supported only in 2D and 3D." );
-
-            switch( permutation )
-            {
-                case TPPermutation::ZeroToZero: return { { 0, false }, { 1, true } };
-                case TPPermutation::ZeroToOne: return { { 1, false }, { 0, false } };
-                case TPPermutation::ZeroToTwo: return { { 0, true }, { 1, false } };
-                case TPPermutation::ZeroToThree: return { { 1, true }, { 0, true } };
-                case TPPermutation::Flip1d:
-                    throw std::invalid_argument( "A three-dimensional patch interface requires a face permutation." );
-            }
-            throw std::invalid_argument( "Unknown tensor-product interface permutation." );
-        }
 
         std::vector<size_t> tangentialAxes( const size_t dim, const size_t side_id )
         {
@@ -114,17 +85,17 @@ namespace basis
 
                 const std::vector<size_t> first_axes = tangentialAxes( dim, first_side.side_id );
                 const std::vector<size_t> second_axes = tangentialAxes( dim, second_side.side_id );
-                const std::vector<TraceAxisTransform> transforms = traceAxisTransforms( dim, permutation );
+                const topology::SideCoordinateTransform transform = topology::sideCoordinateTransform(
+                    dim, first_side.side_id, second_side.side_id, permutation );
 
-                for( size_t trace_axis = 0; trace_axis < transforms.size(); trace_axis++ )
+                for( size_t dest_axis = 0; dest_axis < second_axes.size(); dest_axis++ )
                 {
-                    const TraceAxisTransform transform = transforms.at( trace_axis );
-                    const size_t first_axis = first_axes.at( trace_axis );
-                    const size_t second_axis = second_axes.at( transform.destination_axis );
+                    const size_t first_axis = first_axes.at( transform.source_axis_for_destination.at( dest_axis ) );
+                    const size_t second_axis = second_axes.at( dest_axis );
                     if( compatibleKnotPatterns(
                             *first_components.at( first_axis ),
                             *second_components.at( second_axis ),
-                            transform.aligned ) )
+                            not transform.source_axis_reversed.at( dest_axis ) ) )
                     {
                         continue;
                     }

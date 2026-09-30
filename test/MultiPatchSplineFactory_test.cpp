@@ -330,14 +330,20 @@ TEST_CASE( "Strong multipatch coupling rejects scaled interface coordinates" )
     const double ptol = 1e-10;
     const KnotVector normal_kv( { 0, 0, 0, 1, 1, 1 }, ptol );
     const KnotVector first_tangent_kv( { 0, 0, 0, 0.25, 1, 1, 1 }, ptol );
+    // Spans [0.25, 0.75] shifted by +5: conforms under the IDENTITY.
+    const KnotVector translated_tangent_kv( { 5, 5, 5, 5.25, 6, 6, 6 }, ptol );
+    // Spans [0.75, 0.25], the mirror of first_tangent_kv: conforms only across
+    // a REVERSING side pair.
     const KnotVector translated_reversed_tangent_kv( { 5, 5, 5, 5.75, 6, 6, 6 }, ptol );
     const KnotVector scaled_tangent_kv( { 5, 5, 5, 6.5, 7, 7, 7 }, ptol );
 
     const auto first_patch = makePatch( { normal_kv, first_tangent_kv }, { 2, 2 } );
-    const auto translated_patch =
+    const auto translated_patch = makePatch( { normal_kv, translated_tangent_kv }, { 2, 2 } );
+    const auto reversed_patch =
         makePatch( { normal_kv, translated_reversed_tangent_kv }, { 2, 2 } );
     const auto scaled_patch = makePatch( { normal_kv, scaled_tangent_kv }, { 2, 2 } );
 
+    // Sides 0<->1 do NOT reverse: F_a cancels Flip1d, leaving the identity.
     const InternalConnectionsMap connections =
         twoPatchConnection( ElementSide( 0, false ), ElementSide( 0, true ), TPPermutation::Flip1d );
 
@@ -347,4 +353,18 @@ TEST_CASE( "Strong multipatch coupling rejects scaled interface coordinates" )
         std::invalid_argument );
     CHECK_NOTHROW(
         buildDiscontinuousMultiPatchSplineSpace( { first_patch, scaled_patch }, connections ) );
+
+    // "Up to orientation reversal" holds only where the side pair reverses.
+    // Sides 0<->1 do not, so the mirrored pattern is rejected there; sides
+    // 0<->3 do, so the same pattern is accepted.  The side-blind validator drew
+    // no such distinction and wrongly accepted the mirror on sides 0<->1.
+    CHECK_THROWS_AS( buildH1MultiPatchSplineSpace( { first_patch, reversed_patch }, connections ),
+                     std::invalid_argument );
+
+    const auto rotated_reversed_patch =
+        makePatch( { translated_reversed_tangent_kv, normal_kv }, { 2, 2 } );
+    const InternalConnectionsMap reversing_connections =
+        twoPatchConnection( ElementSide( 0, false ), ElementSide( 1, true ), TPPermutation::Flip1d );
+    CHECK_NOTHROW( buildH1MultiPatchSplineSpace( { first_patch, rotated_reversed_patch },
+                                                 reversing_connections ) );
 }

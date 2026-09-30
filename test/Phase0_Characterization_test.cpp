@@ -1,11 +1,16 @@
 // Phase 0 characterization harness.  See outstanding_issues.txt items 1 and 2.
 //
 // Assertions are of two kinds and are labelled individually:
-//   PERMANENT - geometry/topology invariants that stay true after the interface
-//               merge defect is fixed.
-//   TEMPORARY - pins the CURRENT DEFECTIVE behaviour so that a silent semantic
-//               change fails loudly.  Every TEMPORARY block must be updated
-//               atomically with the merge fix.
+//   PERMANENT - invariants that hold independently of the interface
+//               correspondence convention.
+//   TEMPORARY - pins current behaviour still governed by an open defect, so a
+//               silent semantic change fails loudly.  Each cites the issue
+//               that retires it.
+//
+// Updated for the Stage 2 side-aware transform.  phi and both function-id
+// merges were always correct; the defect was the side-blind trace and
+// validator consumers, now fixed.  Sides 0<->1 in 2d are NOT reversed -- F_a
+// cancels Flip1d -- so the correspondence in these fixtures is the identity.
 //
 // 3d scope limit: the 3d fixtures carry one interface element per patch, so no
 // reversal or axis swap can change which element pairs with which.  They
@@ -262,31 +267,33 @@ TEST_CASE( "EXPERIMENT B: elementwise cross-patch correspondence, 2d Flip1d", "[
         CHECK( o.b_cols == 3 );
     }
 
-    // TEMPORARY (item 2): a correctly merged Flip1d interface shares all 3
-    // trace functions per paired element.  The identity merge shares 1, and the
-    // coefficients of that one agree only under reversed column order.
+    // PERMANENT: the identity correspondence shares all 3 trace functions per
+    // paired element, with coefficients agreeing column for column.
+    // reversed_col_match == 1 counts only the self-mirrored middle function and
+    // is a fixture artifact, not an invariant of the convention.
     for( const PairObs& o : h1_obs )
     {
         INFO( "dartA=" << o.dart_a << " dartB=" << o.dart_b );
-        CHECK( o.shared == 1 );
-        CHECK( o.identity_col_match == 0 );
-        CHECK( o.reversed_col_match == o.shared );
+        CHECK( o.shared == 3 );
+        CHECK( o.identity_col_match == 3 );
+        CHECK( o.reversed_col_match == 1 );
     }
 
-    // TEMPORARY (item 2): under the identity merge the vector spaces share
-    // nothing at all per paired element, though the factory test shows global
-    // sharing.  Expected to become nonzero when the merge is corrected.
+    // TEMPORARY (row D): with correct pairing the vector spaces share 2 of 5
+    // per paired element rather than 0.  2 is NOT yet the right answer -- the
+    // lower-dimensional H(curl)/H(div) merge is a separate open blocker -- so
+    // these pin current behaviour and retire with row D.
     for( const PairObs& o : observeInterfaces( buildHDivMultiPatchSplineSpace( h1 ) ) )
     {
         CHECK( o.a_rows == 5 );
         CHECK( o.a_cols == 5 );
-        CHECK( o.shared == 0 );
+        CHECK( o.shared == 2 );
     }
     for( const PairObs& o : observeInterfaces( buildHCurlMultiPatchSplineSpace( h1 ) ) )
     {
         CHECK( o.a_rows == 5 );
         CHECK( o.a_cols == 5 );
-        CHECK( o.shared == 0 );
+        CHECK( o.shared == 2 );
     }
 }
 
@@ -325,11 +332,12 @@ TEST_CASE( "EXPERIMENT B: elementwise cross-patch correspondence, 3d permutation
         CHECK( hcurl_obs.front().a_cols == 21 );
         CHECK( hcurl_obs.front().shared == 12 );
 
-        // TEMPORARY (item 2): current extraction column order.  Only ZeroToZero
-        // agrees under identity and only ZeroToTwo agrees under reversal for H1;
-        // the vector spaces agree under neither, so sign/direction handling is
-        // missing beyond reordering.  These change when the shared interface
-        // transform lands.
+        // TEMPORARY (row D): extraction column order.  Only ZeroToZero agrees
+        // under identity and only ZeroToTwo under reversal for H1; the vector
+        // spaces agree under neither, so sign/direction handling is missing
+        // beyond reordering.  MEASURED UNCHANGED by the Stage 2 transform:
+        // column order comes from the extraction operator, not from element
+        // pairing, and a 1x1 side pairs trivially under either convention.
         CHECK( h1_obs.front().identity_col_match == e.h1_id );
         CHECK( h1_obs.front().reversed_col_match == e.h1_rev );
         CHECK( hdiv_obs.front().identity_col_match == e.hdiv_id );
@@ -345,7 +353,9 @@ TEST_CASE( "EXPERIMENT B2: 2d Flip1d pairing versus merging diagnostic", "[phase
     const auto& mp = dynamic_cast<const MultiPatchCombinatorialMap&>(
         h1.basisComplex().parametricAtlas().cmap() );
 
-    // PERMANENT: Flip1d pairs element t with element N-1-t across the interface.
+    // PERMANENT: sides 0<->1 correspond by the identity, so element t pairs
+    // with element t; F_a cancels Flip1d's reversal.  This row previously
+    // pinned the side-blind consumer's reversed pairing and was mislabelled.
     const std::vector<PairObs> obs = observeInterfaces( h1 );
     REQUIRE( obs.size() == 2 );
     for( const PairObs& o : obs )
@@ -356,16 +366,17 @@ TEST_CASE( "EXPERIMENT B2: 2d Flip1d pairing versus merging diagnostic", "[phase
         {
             if( o.dart_a == dartOf( mp, 0, t ) )
             {
-                CHECK( o.dart_b == dartOf( mp, 1, 1 - t ) );
+                CHECK( o.dart_b == dartOf( mp, 1, t ) );
                 matched = true;
             }
         }
         CHECK( matched );
     }
 
-    // TEMPORARY (item 2): the merge is identity -- patch1 element {0,t} carries
-    // exactly the global ids of patch0 element {0,t}, contradicting the reversed
-    // pairing asserted above.  Fixing the merge must break these.
+    // PERMANENT: patch1 element {0,t} carries exactly the global ids of patch0
+    // element {0,t}, which AGREES with the identity pairing above.  These rows
+    // address elements through pure topology and read merged ids, so the
+    // consumer fix left them untouched; only their TEMPORARY label was wrong.
     for( size_t t = 0; t < 2; t++ )
     {
         INFO( "t=" << t );
@@ -374,7 +385,7 @@ TEST_CASE( "EXPERIMENT B2: 2d Flip1d pairing versus merging diagnostic", "[phase
     CHECK( h1.numFunctions() == 25 );
 }
 
-TEST_CASE( "EXPERIMENT B3: asymmetric interface knots distinguish identity from reversed merging", "[phase0]" )
+TEST_CASE( "EXPERIMENT B3: a self-glued asymmetric patch is identity-compatible on sides 0<->1", "[phase0]" )
 {
     const double ptol = 1e-10;
     const KnotVector kv_s( { 0, 0, 0, 1, 1, 1 }, ptol );
@@ -382,22 +393,37 @@ TEST_CASE( "EXPERIMENT B3: asymmetric interface knots distinguish identity from 
     const KnotVector kv_t_asym( { 0, 0, 0, 1, 3, 3, 3 }, ptol );
     const auto patch = makePatch( { kv_s, kv_t_asym }, { 2, 2 } );
 
-    // PERMANENT: a patch glued to itself reversed across a non-palindromic
-    // interface is genuinely incompatible and must be rejected.  This also
-    // confirms compatibleKnotPatterns compares patterns under reversal.
-    REQUIRE_THROWS_AS(
-        buildH1MultiPatchSplineSpace(
-            { patch, patch },
-            twoPatchConnection( ElementSide( 0, false ), ElementSide( 0, true ), TPPermutation::Flip1d ) ),
-        std::invalid_argument );
-    REQUIRE_THROWS_WITH(
-        buildH1MultiPatchSplineSpace(
-            { patch, patch },
-            twoPatchConnection( ElementSide( 0, false ), ElementSide( 0, true ), TPPermutation::Flip1d ) ),
-        Catch::Matchers::ContainsSubstring( "matching tangential spline parameterizations" ) );
+    // PERMANENT: sides 0<->1 correspond by the identity, so a patch glued to
+    // itself across a non-palindromic interface matches axis for axis and is
+    // accepted.  The side-blind validator compared the pattern against its own
+    // reversal and wrongly rejected this; B4 is the converse case.
+    const MultiPatchSplineSpace h1 = buildH1MultiPatchSplineSpace(
+        { patch, patch },
+        twoPatchConnection( ElementSide( 0, false ), ElementSide( 0, true ), TPPermutation::Flip1d ) );
+
+    const auto& mp = dynamic_cast<const MultiPatchCombinatorialMap&>(
+        h1.basisComplex().parametricAtlas().cmap() );
+
+    // PERMANENT: identity pairing on the accepted interface.
+    const std::vector<PairObs> obs = observeInterfaces( h1 );
+    REQUIRE( obs.size() == 2 );
+    for( const PairObs& o : obs )
+    {
+        INFO( "dartA=" << o.dart_a << " dartB=" << o.dart_b );
+        bool matched = false;
+        for( size_t t = 0; t < 2; t++ )
+        {
+            if( o.dart_a == dartOf( mp, 0, t ) )
+            {
+                CHECK( o.dart_b == dartOf( mp, 1, t ) );
+                matched = true;
+            }
+        }
+        CHECK( matched );
+    }
 }
 
-TEST_CASE( "EXPERIMENT B4: mirrored asymmetric interface exposes the merge convention", "[phase0]" )
+TEST_CASE( "EXPERIMENT B4: mirrored asymmetric interfaces are identity-incompatible and rejected", "[phase0]" )
 {
     const double ptol = 1e-10;
     const KnotVector kv_s( { 0, 0, 0, 1, 1, 1 }, ptol );
@@ -420,49 +446,94 @@ TEST_CASE( "EXPERIMENT B4: mirrored asymmetric interface exposes the merge conve
     }
     CHECK( std::abs( len_a( 0 ) - len_b( 0 ) ) > geom_tol );
 
-    // PERMANENT: mirrored patterns are reversal-compatible, so construction is
-    // accepted where B3's self-glued asymmetric patch was rejected.
+    // PERMANENT: sides 0<->1 correspond by the identity, which would couple
+    // patch0's size-1 span to patch1's size-2 span, so this interface is
+    // genuinely incompatible and must be rejected.  Exact converse of B3:
+    // mirroring reconciles the patterns only under a REVERSING side pair.
+    REQUIRE_THROWS_AS(
+        buildH1MultiPatchSplineSpace(
+            { patch_A, patch_B },
+            twoPatchConnection( ElementSide( 0, false ), ElementSide( 0, true ), TPPermutation::Flip1d ) ),
+        std::invalid_argument );
+    REQUIRE_THROWS_WITH(
+        buildH1MultiPatchSplineSpace(
+            { patch_A, patch_B },
+            twoPatchConnection( ElementSide( 0, false ), ElementSide( 0, true ), TPPermutation::Flip1d ) ),
+        Catch::Matchers::ContainsSubstring( "matching tangential spline parameterizations" ) );
+
+    // PERMANENT: per-patch counts are convention-invariant and survive the
+    // rejection.  The glued count h1.numFunctions() == 20 cannot live here now
+    // that construction throws; it belongs to a fixture that still builds.
+    CHECK( patch_A->numFunctions() == 12 );
+    CHECK( patch_B->numFunctions() == 12 );
+}
+
+TEST_CASE( "EXPERIMENT B5: discriminating 3d interface, four elements per side", "[phase0]" )
+{
+    const double ptol = 1e-10;
+    const KnotVector kv_n( { 0, 0, 0, 1, 1, 1 }, ptol );
+    // Two elements on each tangential axis, neither palindromic, and the two
+    // axes mutually distinct, so a reversal or an axis swap changes the pairing.
+    const KnotVector kv_u( { 0, 0, 0, 1, 3, 3, 3 }, ptol ); // spans [1,2]
+    const KnotVector kv_v( { 0, 0, 0, 2, 3, 3, 3 }, ptol ); // spans [2,1]
+    const auto patch = makePatch( { kv_n, kv_u, kv_v }, { 2, 2, 2 } );
+
+    // PERMANENT: on sides 0<->1 with ZeroToZero, F_a's reversal of tangential
+    // axis 0 is cancelled by P's own flip, so the total map F_b o P o F_a is the
+    // identity and a patch glued to itself matches forward on both tangential
+    // axes.  The side-blind consumer applied P alone, which reverses tangential
+    // axis 0, and rejected this fixture outright.
     const MultiPatchSplineSpace h1 = buildH1MultiPatchSplineSpace(
-        { patch_A, patch_B },
-        twoPatchConnection( ElementSide( 0, false ), ElementSide( 0, true ), TPPermutation::Flip1d ) );
+        { patch, patch },
+        twoPatchConnection( ElementSide( 0, false ), ElementSide( 0, true ),
+                            TPPermutation::ZeroToZero ) );
 
     const auto& mp = dynamic_cast<const MultiPatchCombinatorialMap&>(
         h1.basisComplex().parametricAtlas().cmap() );
 
-    // PERMANENT: pairing is reversed here too.
     const std::vector<PairObs> obs = observeInterfaces( h1 );
-    REQUIRE( obs.size() == 2 );
+    REQUIRE( obs.size() == 4 );
+
+    // PERMANENT: element (i,j) pairs with element (i,j), and the shared set is
+    // the whole trace connectivity of that element, not merely its size.
     for( const PairObs& o : obs )
     {
         INFO( "dartA=" << o.dart_a << " dartB=" << o.dart_b );
         bool matched = false;
-        for( size_t t = 0; t < 2; t++ )
+        for( size_t i = 0; i < 2; i++ )
         {
-            if( o.dart_a == dartOf( mp, 0, t ) )
+            for( size_t j = 0; j < 2; j++ )
             {
-                CHECK( o.dart_b == dartOf( mp, 1, 1 - t ) );
-                matched = true;
+                if( o.dart_a == patchTopCellAt( mp, 0, { 0, i, j } ).dart().id() )
+                {
+                    CHECK( o.dart_b == patchTopCellAt( mp, 1, { 0, i, j } ).dart().id() );
+                    matched = true;
+                }
             }
         }
         CHECK( matched );
+        CHECK( o.a_cols == 9 );
+        CHECK( o.shared == 9 );
     }
+}
 
-    // TEMPORARY (item 2): the merge is identity even here, gluing patch0's
-    // size-1 element to patch1's size-2 element.  All 4 interface functions
-    // merge on the wrong correspondence: 20 == 12 + 12 - 4, and each paired
-    // element shares 2 of 3 rather than 3 of 3.  THIS BLOCK IS THE REGRESSION
-    // TEST FOR THE MERGE FIX and must be rewritten when the merge is corrected.
-    CHECK( patch_A->numFunctions() == 12 );
-    CHECK( patch_B->numFunctions() == 12 );
-    CHECK( h1.numFunctions() == 20 );
-    for( size_t t = 0; t < 2; t++ )
-    {
-        INFO( "t=" << t );
-        CHECK( interfaceIds( h1, mp, 1, t ) == interfaceIds( h1, mp, 0, t ) );
-    }
-    for( const PairObs& o : obs )
-    {
-        INFO( "dartA=" << o.dart_a << " dartB=" << o.dart_b );
-        CHECK( o.shared == 2 );
-    }
+TEST_CASE( "EXPERIMENT B6: mirrored 3d tangential knots are rejected on this side pair",
+           "[phase0]" )
+{
+    const double ptol = 1e-10;
+    const KnotVector kv_n( { 0, 0, 0, 1, 1, 1 }, ptol );
+    const KnotVector kv_u( { 0, 0, 0, 1, 3, 3, 3 }, ptol );
+    const KnotVector kv_v( { 0, 0, 0, 2, 3, 3, 3 }, ptol );
+    const auto patch_A = makePatch( { kv_n, kv_u, kv_v }, { 2, 2, 2 } );
+    const auto patch_B = makePatch( { kv_n, kv_v, kv_v }, { 2, 2, 2 } );
+
+    // PERMANENT: the identity total map couples tangential axis 1 forward, so
+    // mirrored patterns [1,2] against [2,1] are genuinely incompatible.
+    // Converse of B5 and the 3d counterpart of B4.
+    REQUIRE_THROWS_AS(
+        buildH1MultiPatchSplineSpace(
+            { patch_A, patch_B },
+            twoPatchConnection( ElementSide( 0, false ), ElementSide( 0, true ),
+                                TPPermutation::ZeroToZero ) ),
+        std::invalid_argument );
 }

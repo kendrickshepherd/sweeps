@@ -148,28 +148,47 @@ namespace
 
 TEST_CASE( "Phase 5A trace side coordinate permutations match multipatch conventions" )
 {
-    CHECK( permuteTraceSideIndex( { 0 }, { 3 }, TPPermutation::Flip1d ) == std::vector<size_t>{ 2 } );
-    CHECK_THAT( permuteTraceSidePoint( Eigen::Vector<double, 1>( 0.25 ), TPPermutation::Flip1d )( 0 ),
+    // Side pairs chosen so F_b o P o F_a equals P, which is what these values
+    // were originally pinned against: 2D sides 0<->3 reverse, and 3D sides
+    // 1<->2 leave P untouched.
+    const auto t2d = topology::sideCoordinateTransform( 2, 0, 3, TPPermutation::Flip1d );
+    CHECK( permuteTraceSideIndex( t2d, { 0 }, { 3 } ) == std::vector<size_t>{ 2 } );
+    CHECK_THAT( permuteTraceSidePoint( t2d, Eigen::Vector<double, 1>( 0.25 ) )( 0 ),
                 Catch::Matchers::WithinAbs( 0.75, 1e-14 ) );
 
-    CHECK( permuteTraceSideIndex( { 0, 3 }, { 4, 5 }, TPPermutation::ZeroToZero ) ==
+    const auto t3d = []( const TPPermutation p ) {
+        return topology::sideCoordinateTransform( 3, 1, 2, p );
+    };
+
+    CHECK( permuteTraceSideIndex( t3d( TPPermutation::ZeroToZero ), { 0, 3 }, { 4, 5 } ) ==
            std::vector<size_t>{ 3, 3 } );
-    CHECK( permuteTraceSideIndex( { 0, 3 }, { 4, 5 }, TPPermutation::ZeroToOne ) ==
+    CHECK( permuteTraceSideIndex( t3d( TPPermutation::ZeroToOne ), { 0, 3 }, { 4, 5 } ) ==
            std::vector<size_t>{ 1, 3 } );
-    CHECK( permuteTraceSideIndex( { 0, 3 }, { 4, 5 }, TPPermutation::ZeroToTwo ) ==
+    CHECK( permuteTraceSideIndex( t3d( TPPermutation::ZeroToTwo ), { 0, 3 }, { 4, 5 } ) ==
            std::vector<size_t>{ 0, 1 } );
-    CHECK( permuteTraceSideIndex( { 0, 3 }, { 4, 5 }, TPPermutation::ZeroToThree ) ==
+    CHECK( permuteTraceSideIndex( t3d( TPPermutation::ZeroToThree ), { 0, 3 }, { 4, 5 } ) ==
            std::vector<size_t>{ 3, 0 } );
 
     const Eigen::Vector2d point( 0.2, 0.7 );
-    CHECK( ( permuteTraceSidePoint( point, TPPermutation::ZeroToZero ) - Eigen::Vector2d( 0.8, 0.7 ) ).norm() <
-           1e-14 );
-    CHECK( ( permuteTraceSidePoint( point, TPPermutation::ZeroToOne ) - Eigen::Vector2d( 0.3, 0.8 ) ).norm() <
-           1e-14 );
-    CHECK( ( permuteTraceSidePoint( point, TPPermutation::ZeroToTwo ) - Eigen::Vector2d( 0.2, 0.3 ) ).norm() <
-           1e-14 );
-    CHECK( ( permuteTraceSidePoint( point, TPPermutation::ZeroToThree ) - Eigen::Vector2d( 0.7, 0.2 ) ).norm() <
-           1e-14 );
+    CHECK( ( permuteTraceSidePoint( t3d( TPPermutation::ZeroToZero ), point ) -
+             Eigen::Vector2d( 0.8, 0.7 ) )
+               .norm() < 1e-14 );
+    CHECK( ( permuteTraceSidePoint( t3d( TPPermutation::ZeroToOne ), point ) -
+             Eigen::Vector2d( 0.3, 0.8 ) )
+               .norm() < 1e-14 );
+    CHECK( ( permuteTraceSidePoint( t3d( TPPermutation::ZeroToTwo ), point ) -
+             Eigen::Vector2d( 0.2, 0.3 ) )
+               .norm() < 1e-14 );
+    CHECK( ( permuteTraceSidePoint( t3d( TPPermutation::ZeroToThree ), point ) -
+             Eigen::Vector2d( 0.7, 0.2 ) )
+               .norm() < 1e-14 );
+
+    // The side pair now matters: on a disagreeing pair the same permutation
+    // gives a different map.  These rows fail under the old P-only consumer.
+    const auto t2d_agree = topology::sideCoordinateTransform( 2, 0, 1, TPPermutation::Flip1d );
+    CHECK( permuteTraceSideIndex( t2d_agree, { 0 }, { 3 } ) == std::vector<size_t>{ 0 } );
+    const auto t3d_flip = topology::sideCoordinateTransform( 3, 0, 1, TPPermutation::ZeroToZero );
+    CHECK( permuteTraceSideIndex( t3d_flip, { 0, 3 }, { 4, 5 } ) == std::vector<size_t>{ 0, 3 } );
 }
 
 TEST_CASE( "Phase 5A trace mesh enumerates simple 3D patch interfaces" )

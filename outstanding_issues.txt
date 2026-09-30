@@ -8,36 +8,48 @@ Last updated: 2026-09-29
 PHASE 0 RESULTS — MEASURED 2026-09-29
 -------------------------------------------------------------------------------
 
-STATUS: COMPLETE, pending commit.  The harness now carries 148 executable
-assertions across 6 cases.  It previously had NONE - a green run then proved
-only that the cases did not throw, and the conclusions below had been read off
-printed diagnostics.  The 3D limitation is formally scoped out below rather
-than fixed.
+STATUS: COMPLETE, pending commit.  UPDATED BY STAGE 2 (2026-09-30): the harness
+now carries 165 executable assertions across 8 cases, all passing, after the
+label/outcome corrections and two new discriminating 3D cases (B5, B6).  It
+previously had NONE - a green run then proved only that the cases did not throw,
+and the conclusions below had been read off printed diagnostics.  The 3D
+limitation recorded below is now PARTLY LIFTED: B5 carries four interface
+elements with non-palindromic, mutually distinct tangential knots.
 
 Harness: test/Phase0_Characterization_test.cpp (new; one additive line in
 test/CMakeLists.txt registers it).  No production code was changed in Phase 0.
 Assertions are labelled in two classes, and the distinction is load-bearing:
 
-  PERMANENT - invariants that stay true after the merge defect is fixed:
-              reversed Flip1d pairing, equal span lengths under reversed
-              pairing and unequal under identity, requested leaf sets
-              preserved, and B3's rejection of a self-glued non-palindromic
-              patch.
-  TEMPORARY - pins the CURRENT DEFECTIVE behaviour so a silent semantic change
-              fails loudly: identity merge, numFunctions 25 (B2) and 20 (B4),
-              shared counts 1 and 2, the current 3D column-match counts, and
-              item 1's H(div)/H(curl) rejection.  Each MUST be updated
-              ATOMICALLY with the corresponding fix.  The TEMPORARY block in
-              EXPERIMENT B4 is the designated regression test for the merge
-              fix.
+  PERMANENT - invariants independent of the correspondence convention.  AS
+              CORRECTED BY STAGE 2: IDENTITY pairing on sides 0<->1 in both 2D
+              and 3D, equal span lengths under reversed pairing and unequal
+              under identity (pure KnotVector arithmetic), requested leaf sets
+              preserved, B3's ACCEPTANCE of a self-glued non-palindromic patch,
+              B4's and B6's REJECTION of mirrored patterns on this side pair,
+              numFunctions 25 (B2), and B5's per-element pairing with the full
+              9-function shared set.
+  TEMPORARY - pins current behaviour still governed by an OPEN defect: the
+              H(div)/H(curl) per-element shared count of 2 and the 3D
+              column-match counts, both of which retire with row D, plus item
+              1's H(div)/H(curl) rejection.  Each MUST be updated ATOMICALLY
+              with the corresponding fix.  B4 no longer holds a merge-fix
+              regression block; its fixture correctly throws.
 
-CORRECTION (Stage 1, 2026-09-29): six of those labels are wrong, in both
-directions.  Four PERMANENT assertions actually pin DEFECTIVE behaviour and two
-TEMPORARY ones are convention-invariant.  See "TEST-LABEL CORRECTIONS" under
-STAGE 1 RESULTS below.  Do not rely on the two-class split as written above.
+CORRECTION (Stage 1, 2026-09-29; COUNT REVISED AND APPLIED BY STAGE 2,
+2026-09-30): the mislabelled count was NOT six.  Stage 1 enumerated six, but
+EXPERIMENT B2's "PERMANENT: Flip1d pairs element t with element N-1-t" pinned
+the same defective trace pairing Stage 1 condemned in B4, making it a SEVENTH;
+and B2's interfaceIds block was a mislabelled TEMPORARY that the consumer fix
+left untouched, an EIGHTH.  All eight are now corrected in the file with
+MEASURED values.  See "TEST-LABEL CORRECTIONS" under STAGE 1 RESULTS below.
 
-Verification: 148 assertions in 6 cases, all pass; full non-slow suite 174/174
-in 123 s.
+Verification (Stage 2, 2026-09-30): Phase 0 165 assertions in 8 cases, Stage 1
+19 cases / 3102 assertions, MultiPatchSplineFactory 56 assertions in 5 cases,
+and the FULL suite 198/198 in 114 s at ctest exit 0 - all on a build with zero
+error-or-warning lines.  Superseded figures: 148 assertions in 6 cases with a
+full non-slow suite of 174/174 in 123 s; and a first full-suite attempt that
+returned 197/198, its single failure being the fixture defect recorded under
+TEST-LABEL CORRECTIONS.
 
 Baseline: 168/168 ctest tests pass, 0 failures, 151 s, excluding the three
 [slow] cases via ctest -E "Tracing from all the". (Note: -E "macaroni" is the
@@ -107,8 +119,10 @@ no production file was modified.  The original evidence was eight standalone
 probes compiled against the built libraries and kept in the session scratchpad,
 which would have vanished with the session.  Those conclusions are now carried
 by test/Stage1_InterfaceTransform_test.cpp, registered in test/CMakeLists.txt:
-15 cases, 3083 assertions.  Twelve cases assert invariants that hold today;
-three carry [known-defect][!shouldfail].  Full suite 192/192.
+19 cases, 3102 assertions (Stage 2, 2026-09-30).  ALL NINETEEN PASS: the three
+[known-defect][!shouldfail] tags are removed and those requirement cases now
+hold genuinely against the migrated consumers.  Superseded figure: 15 cases,
+3083 assertions with three inverted cases, full suite 192/192.
 
 HEADLINE: PHASE 0'S ATTRIBUTION IS INVERTED.  Phase 0 recorded that "Flip1d
 reversal is AUTHORITATIVE ... the function-ID merge is the one inconsistent
@@ -259,6 +273,64 @@ WHY NO EXISTING TEST CAUGHT IT - THREE INDEPENDENT MASKING MECHANISMS
   the scalar's 1.  The identical helper returns 2 on the agreeing control.
 
 TEST-LABEL CORRECTIONS REQUIRED IN test/Phase0_Characterization_test.cpp
+
+  RESOLVED BY STAGE 2, 2026-09-30, with MEASURED values.  What the run showed,
+  set against the predictions recorded below:
+    - B3 now CONSTRUCTS and B4 now THROWS, exactly as predicted here.  B4's
+      message is "Patch 0 axis 1 is incompatible with patch 1 axis 1".
+    - B2's dart pairing flipped to IDENTITY (dart_b 8 where the old assertion
+      demanded 12, and 12 where it demanded 8) - confirming B2 as the SEVENTH
+      mislabel, beyond the six enumerated below.
+    - B's h1 rows moved shared 1 -> 3 and identity_col_match 0 -> 3, with
+      reversed_col_match 1, which counts only the self-mirrored middle function
+      and is a fixture artifact rather than an invariant.
+    - B's H(div)/H(curl) per-element shared moved 0 -> 2.  2 is NOT the final
+      answer; those rows stay TEMPORARY and retire with row D.
+    - The 3D column-match table was MEASURED UNCHANGED.  An earlier Stage 2
+      prediction that it would shift was WRONG: column order comes from the
+      extraction operator, not from element pairing, and a 1x1 side pairs
+      trivially under either convention.
+    - numFunctions 20 (B4) has NO home: that fixture now correctly throws and
+      so cannot evaluate a count.  Count-invariance is carried instead by B2's
+      numFunctions 25, which still constructs.  Do not resurrect 20.
+    - The replacement discriminating fixture is B5, taking this section's
+      "sides 0<->1 with identical knots" option: one non-palindromic patch
+      glued to itself, 2x2 interface elements, asserting per-element identity
+      pairing together with the full 9-function shared set.  B6 is its converse
+      rejection.
+
+  THE FALLOUT WAS NOT CONFINED TO PHASE 0.  A first full-suite run returned
+  197/198: test/MultiPatchSplineFactory_test.cpp's "Strong multipatch coupling
+  rejects scaled interface coordinates" failed.  That is a THIRD instance of the
+  B4 defect class, and the only one outside Phase 0.  Its fixture paired
+  first_tangent_kv {0,0,0,0.25,1,1,1} (spans [0.25, 0.75]) against
+  translated_reversed_tangent_kv {5,5,5,5.75,6,6,6} (spans [0.75, 0.25], the
+  MIRROR rather than a translation) across sides 0<->1 and asserted NOTHROW.
+  The side-blind validator compared the second backwards and matched; the
+  side-aware validator applies the identity on 0<->1 and correctly refuses to
+  glue a 0.25 element to a 0.75 one.  phi, the untouched oracle, pairs element t
+  with element t on this pair, so the throw is right and the fixture had encoded
+  the defective convention.
+  Repair: a genuinely translated {5,5,5,5.25,6,6,6} restores the test's stated
+  purpose - accept translation, reject scaling - and the mirrored vector is now
+  asserted BOTH ways: rejected across non-reversing sides 0<->1, accepted across
+  genuinely reversing sides 0<->3 (ElementSide(1,true), with the mirrored knots
+  on that patch's axis 0 so the tangential axes line up).  That pair is the
+  first coverage anywhere of the validator's "up to orientation reversal"
+  clause.  Measured: 5 assertions, all passing.
+  Counted separately from the EIGHT mislabelled Phase 0 assertions - those are
+  labels, this is a fixture.
+
+  MASKING SWEEP (2026-09-30).  Every other multipatch construction fixture was
+  checked for passing-for-the-wrong-reason.  All tangential knot vectors outside
+  Phase 0 are single-span or uniform, hence palindromic and reversal-invariant:
+  {0,0,0,1,1,1} throughout, kv_t_c0 {0,0,0,1,1,2,2,2} (spans [1,1]),
+  {0,0,0,1,2,3,3,3} (spans [1,1,1]), fine_kv {0,0,0,0.5,1,1,1} and fine_s
+  {0,0,0,0.5,1,1.5,2,2,2}.  Those are nondiscriminating but not wrong.  The case
+  above held the only non-palindromic tangential knots, which is why it was the
+  only failure.  Read this as an audit of existing fixture SENSITIVITY, not as
+  an independent correctness proof: it explains why exactly one test failed, and
+  establishes nothing about configurations no fixture exercises.
 
   Every Phase 0 fixture glues twoPatchConnection(ElementSide(0,false),
   ElementSide(0,true), ...) = sides 0<->1, which is in the DISAGREEING class in
@@ -520,9 +592,10 @@ WHAT STAGE 2 MUST DO
   4. Then change consumers E, F and G to use it, and update TraceMesh_test's
      "Phase 5A trace side coordinate permutations match multipatch conventions"
      (test/TraceMesh_test.cpp:149-173, every row of which passes the permutation
-     alone), B3/B4's expected outcomes and the six mislabelled Phase 0
-     assertions ATOMICALLY in the same commit.  Do not leave a commit in which
-     production behaviour and the Phase 0 characterization disagree.
+     alone), B3/B4's expected outcomes and ALL mislabelled Phase 0 assertions
+     (EIGHT, not six - see the CORRECTION at the top of this file) ATOMICALLY in
+     the same commit.  Do not leave a commit in which production behaviour and
+     the Phase 0 characterization disagree.  [DONE 2026-09-30.]
   5. Build 3D fixtures that DISCRIMINATE.  From probe 7: at least 2 elements
      along BOTH tangential axes, non-palindromic and mutually distinct knot
      patterns, and a side pair from a disagreeing class.  A 3x3 grid separates
@@ -543,16 +616,44 @@ STAGE 2 IS COMPLETE ONLY WHEN
 
   1. the 3D coverage claim is exhaustive or explicitly narrowed  [DONE: all 144
      triples asserted; the old 120-gluing figure corrected in 3D RULE above].
-  2. the transform contract includes destination-shape validation  [DONE as a
-     contract: transformedExtents, see step 3; not yet implemented].
-  3. consumers E, F and G use the shared transform.
-  4. all three [!shouldfail] tags are removed while their tests REMAIN.
-  5. B3/B4 and the six Phase 0 labels are corrected ATOMICALLY with 3.
-  6. discriminating multi-element 3D fixtures pass.
-  7. the full suite passes.
+  2. the transform contract includes destination-shape validation  [DONE and
+     now IMPLEMENTED: src/topology/SideCoordinateTransform.{hpp,cpp}, with
+     transformedExtents compared against the actual destination extents at both
+     element-count call sites].
+  3. consumers E, F and G use the shared transform.  [DONE: TraceMesh.cpp's
+     permuteTraceSideIndex and permuteTraceSidePoint delegate to it,
+     MultiPatchSplineSpace.cpp's knot validator loop is destination-indexed off
+     it, and VectorConformingHierarchicalMultiPatchSplineSpace.cpp uses it at
+     its own call site.  traceAxisTransforms is deleted.]
+  4. all three [!shouldfail] tags are removed while their tests REMAIN.  [DONE:
+     19 cases, 3102 assertions, all passing.]
+  5. B3/B4 and the six Phase 0 labels are corrected ATOMICALLY with 3.  [DONE,
+     and the count was EIGHT, not six: 165 assertions in 8 cases, all passing.]
+  6. discriminating multi-element 3D fixtures pass.  [DONE: B5 carries 2x2
+     interface elements with non-palindromic, mutually distinct tangential
+     knots on a side pair that disagrees with P, asserting per-element pairing
+     and the full shared set; B6 is the converse rejection.]
+  7. the full suite passes.  [DONE: 198/198 ctest tests pass, 0 failures,
+     ctest exit 0, 114 s under -j 8, on a build with zero error-or-warning
+     lines.  198 = the prior 192 plus 4 new Stage 1 cases and 2 new Phase 0
+     cases.  One pre-existing test had to be repaired first; see TEST-LABEL
+     CORRECTIONS.]
   8. the H(curl) lower-dimensional merge question (row D) remains explicitly
      tracked as a SEPARATE BLOCKER before anyone claims complete 3D multipatch
      H(curl) support.  Stage 2 does not close it and must not imply it does.
+     [STILL OPEN BY DESIGN.  Its live markers are B's H(div)/H(curl)
+     shared == 2 rows and the 3D column-match table.]
+
+  FRAMING: with 1-7 satisfied, STAGE 2'S SIDE-AWARE INTERFACE-CONSUMER REPAIR
+  IS COMPLETE.  That is the claim, and it is deliberately scoped: it does NOT
+  certify complete 3D multipatch H(curl) support.  Row D (criterion 8) remains
+  a separately tracked blocker, trace column ordering (step e) is untouched,
+  and the phi refactor stays deferred to a separate later commit - it was
+  optional from the outset, and separating it is precisely what preserved phi
+  as an independent oracle, so it is not a gate on this completion.
+  SUPERSEDES an earlier framing of this work as a "STAGE 2 PREFLIGHT /
+  DIAGNOSTIC CHECKPOINT and NOT Stage 2 completion", which contradicted
+  criteria 1-7 being marked DONE in the same list.
 
 SCOPE LIMITS - WHAT STAGE 1 DOES NOT ESTABLISH
 
@@ -572,14 +673,15 @@ SCOPE LIMITS - WHAT STAGE 1 DOES NOT ESTABLISH
     or probe 5, and the paper corroborates the implementation rather than
     standing in for measurement.
   - Stage 1's own conclusions ARE now regression-protected, by
-    test/Stage1_InterfaceTransform_test.cpp (15 cases, 3083 assertions; full
-    suite 192/192).  The interface-correspondence claims are EXHAUSTIVE: all 16
-    ordered 2D side pairs, and all 144 3D (side, side, permutation) triples.
-    What stays unprotected is everything in the bullets above: physical
-    conformity, the 3D knot-compatibility verdicts, and any configuration
-    beyond two patches.  Note also that the three [known-defect] cases are
-    green only because Catch2 inverts them while the defect stands; they are
-    requirement statements, not evidence that the tree is correct.
+    test/Stage1_InterfaceTransform_test.cpp (19 cases, 3102 assertions as of
+    2026-09-30; superseded figure 15 cases, 3083 assertions).  The
+    interface-correspondence claims are EXHAUSTIVE: all 16 ordered 2D side
+    pairs, and all 144 3D (side, side, permutation) triples.  What stays
+    unprotected is everything in the bullets above: physical conformity, the 3D
+    knot-compatibility verdicts, and any configuration beyond two patches.  The
+    earlier caveat that three [known-defect] cases were "green only because
+    Catch2 inverts them while the defect stands" NO LONGER APPLIES: those tags
+    are removed and the three requirement cases now pass on their own terms.
 
 
 MEDIUM PRIORITY — Architectural / Correctness
@@ -668,7 +770,8 @@ MEDIUM PRIORITY — Architectural / Correctness
    reduce the interface correspondence to the stored permutation alone and so
    cannot be correct in 2D, where that permutation is a constant.  The defect is
    in their SIGNATURES, not their arithmetic.  See STAGE 1 RESULTS for the 2D and
-   3D rules, the consumer table, and the six Phase 0 test labels that are wrong.
+   3D rules, the consumer table, and the mislabelled Phase 0 test labels (EIGHT,
+   not six; all corrected 2026-09-30).
 
    SUPERSEDED TEXT follows, kept as the record of what was believed before
    Stage 1.  Its description of WHICH component does WHAT is accurate; its
@@ -725,11 +828,12 @@ MEDIUM PRIORITY — Architectural / Correctness
         [a in {1,2}] + [b in {1,2}] is even.  3D: F_b o P o F_a with F_s
         flipping tangential axis 0 iff s in {0,3,4}.  Prefer one shared helper
         over four copies.
-     d. Swap B3's and B4's expected outcomes and correct the six mislabelled
-        Phase 0 assertions, atomically with c.  A non-palindromic fixture is
-        necessary but NOT sufficient as a regression test - it must also use a
-        side pair in a disagreeing class and assert per-element shared sets,
-        since counts are invariant.
+     d. [DONE 2026-09-30.]  Swap B3's and B4's expected outcomes and correct
+        the mislabelled Phase 0 assertions (EIGHT, not six), atomically with c.
+        A non-palindromic fixture is necessary but NOT sufficient as a
+        regression test - it must also use a side pair in a disagreeing class
+        and assert per-element shared sets, since counts are invariant.  B5
+        satisfies all three conditions.
      e. Only then align trace column ordering, adding an explicit ordering field
         to TraceSideData.
      f. Separately assess connectionsOfSweptMultipatch (consumer J) and the
