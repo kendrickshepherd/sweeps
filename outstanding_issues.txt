@@ -102,11 +102,13 @@ Experiment B - per-element cross-patch correspondence (item 2).
 STAGE 1 RESULTS — MEASURED 2026-09-29
 -------------------------------------------------------------------------------
 
-STATUS: COMPLETE.  Read-only localization stage.  No production file and no
-tracked file other than this one was modified.  Evidence is eight standalone
+STATUS: COMPLETE, AND NOW REGRESSION-CERTIFIED.  Read-only localization stage;
+no production file was modified.  The original evidence was eight standalone
 probes compiled against the built libraries and kept in the session scratchpad,
-not the test suite.  Where a claim rests on printed probe output rather than an
-asserted test, it says so.
+which would have vanished with the session.  Those conclusions are now carried
+by test/Stage1_InterfaceTransform_test.cpp, registered in test/CMakeLists.txt:
+15 cases, 3083 assertions.  Twelve cases assert invariants that hold today;
+three carry [known-defect][!shouldfail].  Full suite 192/192.
 
 HEADLINE: PHASE 0'S ATTRIBUTION IS INVERTED.  Phase 0 recorded that "Flip1d
 reversal is AUTHORITATIVE ... the function-ID merge is the one inconsistent
@@ -176,9 +178,9 @@ THE ACTUAL DEFECT: SIDE-BLIND CONSUMERS
     Corrected 2D transform: reverse iff [a in {1,2}] + [b in {1,2}] is even,
     equivalently aligned = ([a in {1,2}] + [b in {1,2}]) is odd.
 
-  3D RULE (probe 7: 120 gluings built through the PRODUCTION dart-pair
-  constructor, so permutations are DERIVED by initializeInterMapConnections and
-  not hand-picked).
+  3D RULE (originally probe 7, 120 gluings through the PRODUCTION dart-pair
+  constructor so permutations were DERIVED by initializeInterMapConnections;
+  now measured EXHAUSTIVELY over all 144 triples by the registered test).
     permuteTraceSideIndex's four 3D cases are character-for-character identical
     to permuteAcrossBoundary's, so the trace reproduces the permute step exactly
     and omits precisely the two flipNecessaryDarts applications.  With F_s =
@@ -189,13 +191,39 @@ THE ACTUAL DEFECT: SIDE-BLIND CONSUMERS
       g(a)=g(b)=1  (both in {0,3,4})  -> AGREE iff P preserves axis 0, i.e.
                                          ZeroToZero or ZeroToTwo; DISAGREE for
                                          ZeroToOne and ZeroToThree
-    Measured: 45 fully agreeing, 75 partially disagreeing, 0 fully disagreeing.
-    All 120 rows fit the rule.
+    MEASURED EXHAUSTIVELY 2026-09-30 over all 6 x 6 x 4 = 144 (source side,
+    destination side, permutation) triples:
+      54 fully agreeing, 90 partially disagreeing, 0 fully disagreeing.
+    Every triple fits the rule.  Separately asserted as a PERMANENT invariant:
+    phi equals the independently restated F_b o P o F_a on all 1296 element
+    pairs (144 x 9), pairing exactly 9 interface elements per triple, and
+    injectively on every one.  Pure topology - bare TPCombinatorialMaps, no
+    knot vectors, no spline spaces, no validator - so the whole sweep costs
+    0.16 s.
+
+    THIS SUPERSEDES the earlier figure "45 fully agreeing, 75 partially
+    disagreeing" over "120 gluings", which OVERSTATED its own generality.  120
+    was not a mathematical denominator: probe 7 looped 6 x 6 x 4 = 144 times
+    but held one fixed source dart per side and keyed results in a std::map on
+    "sa<->sb permName", so triples whose derived permutations coincided
+    collapsed into 120 distinct keys.  The sample happened to preserve the 3/8
+    agreement fraction (45/120 = 54/144), which is exactly why the old numbers
+    looked self-consistent and went unchallenged.  Derived-permutation coverage
+    is still exercised, on two representative pairs, through the real
+    patchTraceMeshInterfaces consumer.
+
     3D is WORSE than 2D, not merely analogous, because the failure is PARTIAL.
     On a 3x3 interface grid the two maps differ by a grid symmetry that always
     has fixed points - 1 of 9 agree under a 180-degree rotation, 3 of 9 under an
     axis swap - so per-element shared counts come out NONZERO BUT WRONG.  There
     is no configuration in which the symptom is total absence of sharing.
+    CONFIRMED exhaustively: the 90 disagreeing triples split into 8-of-9 and
+    6-of-9 disagreements, i.e. exactly the 1-of-9 and 3-of-9 agreement counts
+    this paragraph predicted, and 0 triples disagree on all 9.
+
+    The classification counts describe the DEFECT, so nothing asserts them:
+    they are reported in the [!shouldfail] case's failure message and will be
+    meaningless once the defect is gone.
 
 WHY NO EXISTING TEST CAUGHT IT - THREE INDEPENDENT MASKING MECHANISMS
 
@@ -302,7 +330,7 @@ transformation NEEDED.
      PERFORMED  synchronized tensor iteration over both sides.
      NEEDED     the same.  CORRECT.  Loops cell_dim 0 .. param_dim-1.
 
-  D. vector function-ID merge   VectorConformingMultiPatchSplineSpace.cpp:58
+  D. vector function-ID merge   VectorConformingMultiPatchSplineSpace.cpp:64
      AVAILABLE  the same, plus coordinateTransform and per-component offsets.
      PERFORMED  the same, with component mapping from
        coordinateTransform(atlas, glob_corner_cell).at(vec_comp) and sign via
@@ -315,9 +343,26 @@ transformation NEEDED.
        the expected swap for the rotated gluing: (comp->1,aligned=1) and
        (comp->0,aligned=0) for H(div).
      SEPARATE LIMITATION, not the parity defect: this merge uses
-       cell_dim = multi_cmap.dim() - 1 ONLY, so in 2D it merges across edges but
-       never across vertices, while the scalar merge loops 0 .. param_dim-1.
-       Needs its own assessment.
+       cell_dim = multi_cmap.dim() - 1 ONLY (line 64), while the scalar merge
+       loops cell_dim = 0 .. param_dim-1 (MultiPatchSplineSpace.cpp:278).
+       ASSESSED 2026-09-30:
+         - CORRECT for H(div): normal traces live on faces, so dim-1 is the only
+           relevant cell dimension.
+         - Potentially incomplete for H(curl) in 3D, where tangential DOFs on a
+           shared EDGE matter.
+         - It exists for a reason: coordinateTransform throws for any cell that
+           is not dim-1 (ParametricAtlas.cpp:122), so the vector path has no
+           frame comparison available at lower dimensions.  Lifting the
+           restriction means extending coordinateTransform first.
+         - It may nevertheless be SUFFICIENT: connections are keyed on a
+           ConstituentSide, i.e. a face, so every lower-dimensional sharing
+           arises from a chain of face gluings, and UnionFind merges
+           transitively along that chain.  The configuration that would break it
+           - two patches sharing only an edge with NO chain of face connections
+           between them - may not be constructible through the current API.
+         - VERDICT: track separately with its own gate; NOT a Stage 2 blocker.
+           Proving or refuting the transitivity argument needs a 4-patch 3D block
+           fixture and H(curl) edge-DOF counts, which is new capability work.
 
   E. permuteTraceSideIndex   TraceMesh.cpp:199
      called from TraceMesh.cpp:295 and
@@ -337,7 +382,7 @@ transformation NEEDED.
      AVAILABLE  point, permutation - no side ids.
      PERFORMED  1.0 - point(0) for Flip1d, unconditionally.
      NEEDED     the same conditioning as E, in point space.  DEFECTIVE.
-     Pinned by test/TraceMesh_test.cpp:152 and :165-171.
+     Pinned by test/TraceMesh_test.cpp:152 and :165-172.
 
   G. traceAxisTransforms / compatibleKnotPatterns
      MultiPatchSplineSpace.cpp:23, consumed by
@@ -371,10 +416,28 @@ transformation NEEDED.
      AVAILABLE  the 2D connections, hence both 2D side ids.
      PERFORMED  emits ZeroToZero for EVERY swept 2D connection, with the comment
        "All constituents have the same orientation in this situation."
-     NEEDED     assessment.  Since 2D side pairs split into two parity classes, a
-       2D gluing of sides 0<->1 and one of 0<->3 cannot both correctly map to
-       ZeroToZero.  This is a CONSTRUCTION-side instance of the same
-       side-blindness, separate from the consumer defect.  Reached from
+     NEEDED     ASSESSED 2026-09-30: CORRECT, not defective.  An earlier draft
+       of this row claimed "a 2D gluing of sides 0<->1 and one of 0<->3 cannot
+       both correctly map to ZeroToZero."  THAT CLAIM IS WRONG, and it is wrong
+       in exactly the way Phase 0 was: it read the STORED permutation as the
+       correspondence instead of the total map F_b o P o F_a.  ZeroToZero is
+       right for every lateral pair, for two reasons that compose:
+         - It flips tangential axis 0 and keeps axis 1, and for every lateral
+           side tangential axis 1 IS the swept axis (normal 0 -> tangential
+           (1,2); normal 1 -> tangential (0,2)).  Of the four permutations it is
+           the only one that leaves the sweep aligned layer-to-layer while still
+           reversing in-plane.
+         - In-plane reversal becomes "g3(a)+1+g3(b) odd", i.e. "g3(a)+g3(b)
+           even", against 2D's "g2(a)+g2(b) even".  g2 = {0,1,1,0} and
+           g3 = {1,0,0,1} are exact COMPLEMENTS on the lateral sides, so
+           g2(s)-g3(s) == 1 for all four; the parity rule adds two of them, so
+           the difference cancels.
+       Measured, not merely argued: the swept case in
+       test/Stage1_InterfaceTransform_test.cpp sweeps all 16 ordered 2D side
+       pairs and asserts that the in-plane correspondence equals the 2D phi
+       correspondence and that the swept axis maps layer-to-layer.  2080
+       assertions, all passing.  The one-line source comment under-explains a
+       correct choice; it is not evidence of side-blindness.  Reached from
        SweepAPIMethods.cpp:492 and SphereFoliation_test.cpp:608 and :851.
 
   NOT IMPLICATED
@@ -387,23 +450,109 @@ transformation NEEDED.
 
 WHAT STAGE 2 MUST DO
 
-  1. Decide where the side-aware interface transform lives.  It needs both side
-     ids and the permutation, and is needed in at least four places (E, F, G and
-     the 3D analogue).  One shared helper is the obvious shape; phi already
-     computes it internally and could expose it rather than duplicating it.
-  2. Change the signatures of permuteTraceSideIndex, permuteTraceSidePoint and
-     traceAxisTransforms to take both ConstituentSides.  Update
-     test/TraceMesh_test.cpp:151-171 atomically.
-  3. Swap B3 and B4's expected outcomes and correct the six mislabelled Phase 0
-     assertions, atomically with 2.
-  4. Build 3D fixtures that DISCRIMINATE.  From probe 7: at least 2 elements
+  Order revised after review.  Steps 0-2 are DONE; do NOT begin by changing
+  three signatures.
+
+  0. DONE.  Preserve the probe conclusions as executable tests BEFORE touching
+     any signature, so the refactor lands against a net rather than one woven to
+     fit whatever the refactor produced - this matters because step 3 may
+     relocate the transform into the topology layer.
+     test/Stage1_InterfaceTransform_test.cpp.  Twelve cases assert what holds
+     today.  Three carry [known-defect][!shouldfail]: they assert that the trace
+     layer AGREES with phi, so they name no culprit and cannot be mislabelled
+     the way Phase 0's six value pins were.  Each contains exactly ONE aggregate
+     assertion, so a partial fix cannot hide behind another still-failing row.
+     STAGE 2 REMOVES ONLY THE TAG, NEVER THE TEST.  The tag forces its own
+     removal; the test then guards a lower layer than the step-5 spline
+     fixtures do.  Never replace the agreement assertion with a pin to the
+     current wrong values.
+  1. DONE.  Assess J, the sweep PRODUCER (was step 5).  NOT DEFECTIVE; see row J.
+     This had to precede step 3: freezing a consumer contract while a producer's
+     semantics were unknown risked repairing consumers while newly constructed
+     connections stayed inconsistent.
+  2. DONE.  Assess D's cell_dim restriction (was step 6).  A separate capability
+     limit, not this defect; see row D.  Tracked separately, not a Stage 2 gate.
+  3. The shared side-coordinate transform.  CONTRACT AGREED 2026-09-30 after
+     review; four corrections were applied before approval.  Record:
+
+       struct SideCoordinateTransform   // dim-1 entries
+       {
+           // Both indexed by DESTINATION tangential axis.
+           SmallVector<size_t, 2> source_axis_for_destination;
+           SmallVector<bool, 2>   source_axis_reversed;
+       };
+
+     with, for destination axis d and s = source_axis_for_destination[d]:
+       j_d = source_axis_reversed[d] ? n_s - 1 - i_s : i_s
+     where n_s is the SOURCE extent of axis s.  Measuring the reversal against
+     the source axis it draws from - not against the destination axis - is the
+     fix for the present single `lengths` argument, which measures a flipped
+     swapped axis against the wrong extent.
+
+     Built from: dim, source side id, destination side id, stored permutation.
+     Patch ids are NOT needed, so do not demand full ConstituentSide objects.
+
+     EXTENTS.  Do not take both extent vectors in the index call.  Instead
+     provide
+       std::vector<size_t> transformedExtents( const SideCoordinateTransform&,
+                                               const std::vector<size_t>& source_extents );
+     and have callers compare its result against the destination extents.  The
+     transform then determines BOTH the destination shape and the transformed
+     index, so conformity is checkable rather than assumed; an index-only
+     signature fixes the arithmetic but can never verify the destination
+     lattice.
+
+     VALIDATE: dim is supported; both side ids are < 2*dim; the permutation is
+     valid for that dim; source_axis_for_destination is a permutation; indices
+     and extents have the expected rank; extents are positive; and, for a
+     conforming interface, transformedExtents(source) == destination extents.
+
+     EIGEN.  Keep the record and all integer/extent operations Eigen-free in
+     topology, beside flipNecessaryDarts where F_s already lives.
+     transformSidePoint stays a basis-facing adapter (or takes a small generic
+     coordinate container) so the topology layer does not acquire Eigen.
+
+     Deriving index and point mappings from one record makes disagreement less
+     likely but NOT impossible - the two application functions can still read
+     source_axis_for_destination or source_axis_reversed differently - so the
+     existing "trace side index and point transforms describe the same map"
+     case REMAINS PERMANENT after the refactor.
+  4. Then change consumers E, F and G to use it, and update TraceMesh_test's
+     "Phase 5A trace side coordinate permutations match multipatch conventions"
+     (test/TraceMesh_test.cpp:149-173, every row of which passes the permutation
+     alone), B3/B4's expected outcomes and the six mislabelled Phase 0
+     assertions ATOMICALLY in the same commit.  Do not leave a commit in which
+     production behaviour and the Phase 0 characterization disagree.
+  5. Build 3D fixtures that DISCRIMINATE.  From probe 7: at least 2 elements
      along BOTH tangential axes, non-palindromic and mutually distinct knot
      patterns, and a side pair from a disagreeing class.  A 3x3 grid separates
      the three symmetry classes by agreement count (9/9, 3/9, 1/9).  The current
      3D fixtures carry one element per interface axis, so no reversal or axis
-     swap can change which element pairs with which.
-  5. Assess J independently.
-  6. Assess D's cell_dim = dim-1 restriction independently.
+     swap can change which element pairs with which.  Note that asymmetric
+     ELEMENT COUNTS across an interface trip the validator and throw, so those
+     belong in raw-transform property tests, not in spline construction.
+  6. ONLY AFTER everything above: a SEPARATE, mechanical commit may make phi
+     consume the shared helper.  DO NOT do this while repairing consumers.
+     phi is currently the independent oracle; changing the oracle and its
+     consumers together weakens the evidence even though the tests restate the
+     rule independently.  Gates, all of which must hold first: every
+     [!shouldfail] tag removed; exhaustive 2D and 3D transform tests passing;
+     B3/B4 corrected; discriminating spline fixtures passing.
+
+STAGE 2 IS COMPLETE ONLY WHEN
+
+  1. the 3D coverage claim is exhaustive or explicitly narrowed  [DONE: all 144
+     triples asserted; the old 120-gluing figure corrected in 3D RULE above].
+  2. the transform contract includes destination-shape validation  [DONE as a
+     contract: transformedExtents, see step 3; not yet implemented].
+  3. consumers E, F and G use the shared transform.
+  4. all three [!shouldfail] tags are removed while their tests REMAIN.
+  5. B3/B4 and the six Phase 0 labels are corrected ATOMICALLY with 3.
+  6. discriminating multi-element 3D fixtures pass.
+  7. the full suite passes.
+  8. the H(curl) lower-dimensional merge question (row D) remains explicitly
+     tracked as a SEPARATE BLOCKER before anyone claims complete 3D multipatch
+     H(curl) support.  Stage 2 does not close it and must not imply it does.
 
 SCOPE LIMITS - WHAT STAGE 1 DOES NOT ESTABLISH
 
@@ -422,8 +571,15 @@ SCOPE LIMITS - WHAT STAGE 1 DOES NOT ESTABLISH
     claim attributed to the paper above is independently corroborated by probe 4
     or probe 5, and the paper corroborates the implementation rather than
     standing in for measurement.
-  - These findings come from printed probe output, not from asserted tests.
-    Nothing here is regression-protected until Stage 2 encodes it.
+  - Stage 1's own conclusions ARE now regression-protected, by
+    test/Stage1_InterfaceTransform_test.cpp (15 cases, 3083 assertions; full
+    suite 192/192).  The interface-correspondence claims are EXHAUSTIVE: all 16
+    ordered 2D side pairs, and all 144 3D (side, side, permutation) triples.
+    What stays unprotected is everything in the bullets above: physical
+    conformity, the 3D knot-compatibility verdicts, and any configuration
+    beyond two patches.  Note also that the three [known-defect] cases are
+    green only because Catch2 inverts them while the defect stands; they are
+    requirement statements, not evidence that the tree is correct.
 
 
 MEDIUM PRIORITY — Architectural / Correctness
