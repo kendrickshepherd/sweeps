@@ -1,0 +1,468 @@
+Outstanding Mathematics - Claims Requiring Formal Proof
+=======================================================
+Branch: piola_dev
+Created: 2026-10-01
+Revised: 2026-10-05 (review corrections; see REVISION LOG at the end)
+Companion to: outstanding_issues.txt (engineering work items)
+
+PURPOSE.  outstanding_issues.txt tracks what to BUILD.  This file tracks what is
+BELIEVED but not PROVED.  Several conclusions in that file are load-bearing -
+production code is shaped by them and tests are labelled PERMANENT on their
+authority - yet their evidence is a code-reading argument or a finite set of
+fixtures, not a proof.  Conflating those with measured exhaustion has already
+caused one inverted attribution (see outstanding_issues.txt, "CORRECTED" at the
+head of the merge-pairing entry), so the distinction is recorded explicitly.
+
+PROVENANCE.  This file is committed BEFORE the Row D diagnostics are run.  That
+ordering is deliberate: the hypotheses and their closure language are fixed in
+the record before any measurement exists to tempt a broader claim.  Do not
+revise an item's CLAIM text to match a later result; add the result and change
+the class.
+
+EVIDENCE CLASSES.  Every item below carries one.  Do not promote an item to a
+stronger class without the work named in its ENOUGH WOULD BE field.
+
+  EXHAUSTIVELY VERIFIED  the claim ranges over a finite input space and every
+                        member was executed.  A complete case analysis of
+                        "the implementation agrees with the restated rule on
+                        these inputs" - stronger than MEASURED, because the
+                        domain really is covered.  NOT a derivation: the oracle
+                        is a hand-rolled restatement, the test is itself
+                        executable code that can be wrong, and whatever is not
+                        in the enumerated domain is not covered.
+  MEASURED             true on specific fixtures.  Says nothing about
+                        configurations no fixture exercises.
+  ARGUED-FROM-CODE     follows from reading the implementation.  Sound only
+                        while that code is unchanged, and only if the reading
+                        covered every path.
+  DEFINITIONAL         holds by the construction of the object, not by
+                        validation.  Lapses only if the construction changes.
+  ASSERTED             stated as standard or obvious; no derivation recorded
+                        here and none located in the repository.
+
+PRECEDENT for this discipline, already in outstanding_issues.txt: the CAUTION
+that onSameVertex reads the same phi under examination, so merge/vertex
+agreement is tautological and is NOT evidence.  That is the failure mode this
+file exists to catch earlier.
+
+A STANDING DISTINCTION, load-bearing in M1, M3 and M4.  Two different things
+are easy to conflate:
+  CONTINUOUS CONFORMITY - which continuity conditions the function space
+    requires.  Settled by analysis; see M3.
+  IMPLEMENTATION COVERAGE - whether this code's iterators actually reach every
+    discrete basis function the condition applies to.  NOT settled by any
+    analytic argument, however correct.  Only per-face, per-DOF assertions
+    establish coverage.
+An argument about the first is routinely mistaken for evidence about the second.
+
+
+-------------------------------------------------------------------------------
+M1. TRANSITIVITY OF FACE-LEVEL MERGING TO LOWER-DIMENSIONAL CELLS
+-------------------------------------------------------------------------------
+  CLASS     ARGUED-FROM-CODE.  This is the headline unproved claim.
+  SITE      src/basis/VectorConformingMultiPatchSplineSpace.cpp:64
+            (cell_dim = multi_cmap.dim() - 1), versus the scalar merge's
+            cell_dim = 0 .. param_dim-1 at MultiPatchSplineSpace.cpp:278.
+  CLAIM     Merging DOFs only on dim-1 faces, combined with oriented union-find
+            transitivity, correctly identifies every shared DOF on cells of
+            lower dimension - in particular 3D H(curl) tangential DOFs on an
+            edge shared by several patches.
+  ARGUMENT  (sharpened 2026-10-05)
+            1. H(curl) conformity in 3D requires matching tangential traces
+               across codimension-one faces, and imposes no separate
+               codimension-two continuity condition.  (M3.)
+            2. If every incident patch copy of an edge is connected through
+               face gluings CONTAINING THAT EDGE, pairwise tangential-trace
+               identification propagates transitively through the edge's
+               incident-patch graph.
+            3. Path independence requires trivial orientation parity around
+               every cycle of that graph.  (M4.)
+            The qualifier in 2 is load-bearing: the chain must run through faces
+            incident to the edge, i.e. within the edge's incident-patch graph,
+            NOT along an arbitrary path in the patch graph.  An earlier draft
+            said only "a chain of face gluings", which is loose enough to be
+            unfalsifiable.
+  NOT PROVED  (a) Step 2's hypothesis - that every incident patch copy is so
+            connected - is exactly what the fixtures must check.  The theory
+            supplies the reduction; it does not supply the hypothesis.
+            (b) IMPLEMENTATION COVERAGE.  Even granting steps 1-3, nothing above
+            shows that this implementation's face iterator enumerates every
+            discrete basis function with nonzero trace on the face.  That is a
+            property of cornerCells and the tensor-product iteration, not of the
+            function space, and it must stay supported by per-face DOF
+            assertions rather than by the analytic argument.
+            (c) That the parity carried along a chain composes to the CORRECT
+            value, not merely a consistent one - see M4 and M5.
+  ENOUGH WOULD BE  An argument over the edge's incident-patch graph: for a
+            shared cell c of dimension k < dim-1, show that the set of
+            (patch, local-DOF) pairs supported on c is a single connected
+            component of the graph whose edges are the declared face gluings
+            incident to c, and that the induced parity is the one the de Rham
+            conformity condition requires.  Fixtures cannot supply this; they
+            can only refute it.
+  CLOSURE LANGUAGE  Until proved, state results in this form and no stronger:
+            "Face-level merging with oriented union-find transitivity correctly
+            merges the tested 3D H(curl) edge classes for cyclic and
+            valence-three face-connected configurations supported by the current
+            API."  Do NOT write "proves transitivity for everything
+            expressible" - that conflates fixture evidence with a theorem and
+            additionally smuggles in M2.
+
+
+-------------------------------------------------------------------------------
+M2. EDGE CLASSES ARE GENERATED BY DECLARED FACE GLUINGS
+-------------------------------------------------------------------------------
+  CLASS     DEFINITIONAL for MultiPatchCombinatorialMap; ARGUED-FROM-CODE for
+            closure under the other producers.
+  SITE      src/topology/MultiPatchCombinatorialMap.cpp:198
+            (initializeInterMapConnections).
+  CLAIM     The configuration that would refute M1 - two patches sharing only an
+            edge, with no chain of face gluings between them - does not arise
+            through the current topology API.
+  ARGUMENT  (strengthened 2026-10-05)  The interface API defines gluings as
+            whole ConstituentSide faces: initializeInterMapConnections passes
+            each dart through whichBoundary to obtain a side id and emplaces a
+            ConstituentSide pair, so a dart only SELECTS a side (and in 3D fixes
+            the permutation via dropToBoundary(...).second).  The cells of the
+            multipatch map are phi-orbits, and cross-patch phi comes ONLY from
+            those declared face gluings.  A global edge is therefore an
+            equivalence class GENERATED BY the declared face identifications -
+            by construction of the quotient, not as a property to be validated.
+  NOT PROVED  Closure under the other producers of InternalConnectionsMap:
+            - blockLayout: AUDITED 2026-10-05.  It forwards cmap.connections()
+              unchanged into the InternalConnectionsMap constructor
+              (MultiPatchCombinatorialMap.cpp:450-452), so it introduces no new
+              adjacency.  Face-keyed by construction.
+            - connectionsOfSweptMultipatch: face-keyed by TYPE, but the open
+              question is whether it PRESERVES face-connectedness, which the key
+              shape alone does not establish.
+            - the hierarchical wrappers: not yet examined.
+            Separately, inexpressibility through the CURRENT API is not a
+            statement about combinatorial maps in general.  A future constructor
+            accepting raw adjacency would make M1's argument lapse rather than
+            degrade, so M1 should be re-read if one is added.
+  WITHDRAWN 2026-10-05  Two items from the 2026-10-01 draft are struck:
+            - the former (c), "nothing prevents a caller from building a cmap
+              whose darts realise edge-only adjacency incidentally."  This is
+              simply wrong for this class: the constructors take TP constituents
+              plus connections and never accept raw dart tables.
+            - the proposed lower-dimensional-incidence validation hook.  It was
+              motivated by that false worry.  Since face generation is
+              definitional here, there is nothing for such a hook to validate;
+              adding one before AMR would be substantial and unmotivated.
+  ENOUGH WOULD BE  A one-line argument for each remaining producer.  That is the
+            whole residue.
+
+
+-------------------------------------------------------------------------------
+M3. NO INDEPENDENT CODIMENSION-TWO CONFORMITY CONDITION
+-------------------------------------------------------------------------------
+  CLASS     ASSERTED as to the analysis; the analytic content is standard and
+            was accepted by review 2026-10-05, but no derivation is recorded in
+            this repository.
+  CLAIM     H(curl) conformity in 3D requires matching TANGENTIAL traces across
+            codimension-one faces; H(div) requires matching NORMAL traces across
+            codimension-one faces.  Neither imposes an independent continuity
+            condition on codimension-two cells (edges).  Hence row D's
+            "CORRECT for H(div)" verdict on the dim-1 restriction.
+  SETTLED   The absence of an independent codimension-two condition.  This is
+            what the continuous-space argument does establish.
+  NOT SETTLED BY THAT ARGUMENT  IMPLEMENTATION COVERAGE, per the standing
+            distinction above.  The analytic fact says which continuity is
+            required; it says nothing about whether this code's face iterator
+            enumerates every discrete basis function with nonzero trace on a
+            given face.  In the spline setting this needs care: a
+            tensor-product function supported near a shared edge has nonzero
+            trace on BOTH faces meeting that edge, so the operative question is
+            which DOFs the per-face merge REACHES.  Coverage stays supported by
+            the per-face DOF assertions, not by analysis.
+  ENOUGH WOULD BE  Half a page: name the conformity condition, name the DOF set
+            with nonzero trace on a given face, and show the union of the
+            per-face merges covers it.  The same half page settles the H(curl)
+            analogue's exact failure mode.
+
+
+-------------------------------------------------------------------------------
+M4. THE ORIENTATION PARITY IS A COBOUNDARY, AND THE COMPUTED ONE IS CORRECT
+-------------------------------------------------------------------------------
+  CLASS     mixed.  The algebraic characterisation is PROVED (below).  That the
+            union-find's test is complete on the graph SUPPLIED TO IT is
+            ARGUED-FROM-CODE and verified.  That the supplied graph equals the
+            intended graph is NOT established by any current evidence.  That the
+            computed parity VALUE is correct is M5.
+  SITE      src/util/UnionFind.hpp (unite); coordinateTransform at
+            src/param/ParametricAtlas.cpp:120.
+
+  ALGEBRAIC STATEMENT (corrected 2026-10-05).  Let G be the graph whose vertices
+  are the patch-local copies of a shared cell's DOFs and whose edges are the
+  declared face gluings relating them.  The aligned flag is a Z_2-valued
+  1-COCHAIN c on G.
+    - Calling consistency "a cocycle condition" is VACUOUS and was wrong in the
+      2026-10-01 draft: G is a 1-dimensional CW complex, so C^2(G) = 0, the
+      coboundary out of C^1 is the zero map, and EVERY 1-cochain is a cocycle.
+    - The correct condition is that c be EXACT - a COBOUNDARY.  Consistency
+      holds iff there is f : V -> Z_2 with c(uv) = f(u) + f(v), i.e. c = df,
+      i.e. [c] = 0 in H^1(G; Z_2).  Since H^1(G; Z_2) = Hom(H_1(G), Z_2), the
+      class is detected by parity sums around cycles.
+    - f is a GAUGE: it is exactly the freedom to flip the sign convention of
+      each patch's local DOFs.  Consistency is gauge-invariant; see M5 for why
+      that matters.
+
+  WHAT UnionFind ACTUALLY COMPUTES.  Spanning-tree gauge fixing.  find's path
+  compression leaves is_opposite_parent as parity-to-root, which IS a choice of
+  f (root = 0).  Tree edges DEFINE f; the root_a == root_b branch tests
+  c(ab) against f(a) + f(b) and THROWS ("trying to unite two elements with
+  inconsistent orientation") when they disagree.  So co-tree edges test df
+  against c.  Co-tree edges generate the cycle space, hence:
+    On the graph actually supplied to it, the union-find's test of [c] = 0 is
+    COMPLETE - not a sampling of cycles.
+
+  THE NARROWING THAT MATTERS (review, 2026-10-05).  Completeness is relative to
+  the SUPPLIED graph, and FINAL EQUIVALENCE-CLASS DATA DOES NOT ESTABLISH THAT
+  THE SUPPLIED GRAPH IS THE INTENDED ONE.  If one face constraint is skipped,
+  the remaining paths may still merge every patch-local ID into a single set:
+  the final ID union looks correct while the missing co-tree edge - and
+  therefore its parity check - was never exercised.  A merge never attempted is
+  an edge absent from G, shrinking the tested cycle space silently.  So neither
+  a correct central-edge ID count nor a construction that fails to throw is
+  evidence that the intended constraints were all applied.
+
+  REQUIRED EVIDENCE.  A fixture must assert every INTENDED constraint, not only
+  the final equivalence class:
+    1. the connection map contains twice the declared face-pair count (M9);
+    2. every intended face adjacency contains the selected global edge;
+    3. for every relevant local H(curl) DOF pair across every declared face,
+       the global IDs agree;
+    4. their orientation relationship matches the INDEPENDENT expected sign
+       (M5);
+    5. the incident-patch graph is connected and has beta_1 > 0;
+    6. at least one tested cycle contains a nontrivial orientation transition.
+  Only with 1-6 in place do final central-edge set equality and successful
+  construction become meaningful SUMMARY checks.
+
+  COROLLARY, why chain fixtures prove nothing here.  On a tree every 1-cochain
+  is a coboundary, so consistency is automatic and the parity test is vacuous.
+  That is the algebraic reason the existing L-shaped three-patch case passes
+  without bearing on this question, and why condition 5 above is mandatory.
+
+
+-------------------------------------------------------------------------------
+M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
+-------------------------------------------------------------------------------
+  CLASS     ARGUED-FROM-CODE, now split by coordinate block (2026-10-05).
+  SITE      src/param/ParametricAtlas.cpp:94-160 (getFrame, coordinateTransform).
+  CLAIM     It derives the component map and sign from getFrame on both sides by
+            comparing actual parent-point coordinate changes, never reading the
+            permutation enum, so it is correct by construction and is not
+            implicated in the side-blindness defect class.
+  WHY IT IS PERSUASIVE  The reasoning is sound as far as it goes, and probe 2
+            measured the expected swap for the rotated gluing.  The
+            enum-blindness really does immunise it against the Stage 1 defect.
+
+  WHY CONSISTENCY IS NOT CORRECTNESS.  By M4, the union-find test is invariant
+  under c -> c + df.  A COHERENTLY wrong sign convention is a gauge
+  transformation and is therefore STRUCTURALLY INVISIBLE to it.  No amount of
+  construction-not-throwing can detect one.  An independently derived expected
+  orientation is mandatory, not optional.
+
+  THE INDEPENDENT COMPARISON, AND ITS EXACT REACH.  sideCoordinateTransform
+  derives the signed axis permutation from (dim, source_side_id,
+  destination_side_id, permutation) and NEVER CALLS phi; coordinateTransform
+  derives it from getFrame corner geometry THROUGH phi.  Comparing them on the
+  same interface is a genuine cross-derivation, not a restatement.
+    REACH (narrowed by review 2026-10-05): SideCoordinateTransform describes
+    only the dim-1 TANGENTIAL coordinates, whereas coordinateTransform includes
+    the NORMAL coordinate.  So exhaustive agreement can derive and verify the
+    tangential block only.  The supported claim is:
+      "The independent transform comparison derives and exhaustively verifies
+      the tangential component mapping and sign convention used by 3D H(curl)."
+    It CANNOT derive the whole factor = ( coord != dim - 1 ) expression, and in
+    particular not its normal branch.
+  REMAINING SOFT SPOTS
+            (a) NOT INDEPENDENT OF phi.  getFrame calls phi to reach every
+            corner.  So coordinateTransform corroborates phi only in the weak
+            sense that two consumers of phi agree; it is NOT an oracle for phi,
+            and the standing description of phi as "the independent oracle" must
+            not be read as independence from this function.  Same tautology as
+            the onSameVertex CAUTION, one level up.  PARTIALLY ANSWERED by the
+            comparison above, which is phi-free on one side - for the tangential
+            block only.
+            (b) find_change returns the FIRST coordinate differing by more than
+            1e-10 and throws if none does.  Well-definedness requires exactly
+            one coordinate to differ between a frame corner and the frame
+            origin.  True for axis-aligned tensor-product parent domains; not
+            established in general, and silent (first wins) rather than
+            diagnostic if two differ.
+            (c) THE NORMAL BRANCH OF factor = ( coord != dim - 1 ) STAYS OPEN.
+            The term is an unexplained convention with no derivation in code or
+            notes, and it is load-bearing for every sign the vector merge
+            produces.  The tangential comparison does not reach it.  H(div)
+            depends on the normal branch, so M5 may NOT be closed on H(curl)
+            evidence.
+  ENOUGH WOULD BE  For the tangential block: the comparison above over the 144
+            discrete interface classes, with the index-base and direction
+            conventions reconciled by honest derivation rather than fitted - a
+            fitted reconciliation merely re-expresses one convention in the
+            other's vocabulary and proves nothing.  For the normal branch: its
+            own derivation, or an independent expected-orientation oracle for
+            H(div) normal traces.  Plus a property test asserting exactly one
+            coordinate changes between frame origin and each frame corner.
+
+
+-------------------------------------------------------------------------------
+M6. FUNCTION COUNTS ARE CONVENTION-INVARIANT
+-------------------------------------------------------------------------------
+  CLASS     MEASURED.  NOT A GATE for Row D (review, 2026-10-05); retained as a
+            methodological note because the assertion design depends on it.
+  CLAIM     numFunctions and similar aggregate counts are identical under the
+            correct and the defective pairing convention, in every configuration
+            measured.
+  WHY IT IS RETAINED  It is the reason M4's required evidence asserts per-face,
+            per-DOF and per-patch sets rather than totals.  If it were false in
+            some regime, count-based assertions would regain diagnostic power
+            and some PERMANENT labels would be mislabelled.  No proof is needed
+            to proceed; the rule is simply "do not assert totals".
+  ENOUGH WOULD BE  A proof that the merged dimension depends only on the
+            multiplicity data of the paired interface lattices and not on the
+            pairing orientation whenever the extents match, plus the boundary of
+            that statement, since mismatched extents are where the validator
+            throws instead.
+
+
+-------------------------------------------------------------------------------
+M7. THE MASKING SWEEP IS AN AUDIT, NOT A PROOF
+-------------------------------------------------------------------------------
+  CLASS     MEASURED, and deliberately so.
+  CLAIM     Every tangential knot vector in every multipatch construction
+            fixture outside Phase 0 is single-span or uniform, hence
+            palindromic, hence insensitive to interface reversal - which
+            explains why exactly one test failed when the convention was
+            corrected.
+  SCOPE     An audit of existing fixture SENSITIVITY.  It establishes nothing
+            about configurations no fixture exercises, and it is not an
+            independent correctness proof.  Recorded here so the distinction
+            survives summarisation.
+
+
+-------------------------------------------------------------------------------
+M8. THE 2D AND 3D CORRESPONDENCE RULES
+-------------------------------------------------------------------------------
+  CLASS     EXHAUSTIVELY VERIFIED over the discrete input space; MEASURED over
+            everything else.  (Renamed from PROVED-BY-EXHAUSTION 2026-10-05:
+            "PROVED" invited reading it as a derivation that does not exist.)
+  VERIFIED  2D: all 16 ordered side pairs.  3D: all 144 (side, side,
+            permutation) triples.  Within those finite sets the rules - reverse
+            iff [a in {1,2}] + [b in {1,2}] is EVEN; F_b o P o F_a with F_s
+            flipping tangential axis 0 iff s in {0,3,4} - are established by
+            complete case analysis against a restated oracle.
+  NOT PROVED  No derivation of the rule from drop-permute-raise exists; the
+            oracle is hand-rolled from the implementation's intended semantics,
+            so agreement is not independent confirmation.  Exhaustion is over
+            side pairs and permutations, NOT over extents, element counts,
+            degrees, or knot configurations - those are covered by selected
+            cases only.  So "the transform is correct for all interfaces" does
+            not follow; the supported claim is "correct for every discrete
+            side/permutation class, at the extents tested".
+  ENOUGH WOULD BE  An argument that the index map is affine in the extents given
+            the signed-axis-permutation record, which would lift the extent
+            dimension without further enumeration.
+
+
+-------------------------------------------------------------------------------
+M9. PROOF HYGIENE: DUPLICATE SIDE DECLARATIONS ARE SILENTLY DROPPED
+-------------------------------------------------------------------------------
+  CLASS     ARGUED-FROM-CODE.  Not a mathematical claim; a threat to every
+            fixture-based argument in this file.
+  SITE      initializeInterMapConnections uses std::map::emplace, which does NOT
+            overwrite an existing key.
+  CONSEQUENCE  A fixture that declares the same (patch, side) in two connections
+            keeps the first and discards the second WITHOUT ERROR.  Such a
+            fixture then tests a different topology than the one written down,
+            and any conclusion drawn from it is void.
+  MITIGATION  Folded into M4's required evidence as item 1: assert the
+            connection map holds exactly twice the declared pair count BEFORE
+            asserting anything about DOFs.  "Verify the topology" aimed at edge
+            classes does not catch this, so it is called out separately.
+  ENOUGH WOULD BE  Rejecting a duplicate side declaration at construction, which
+            removes the hazard rather than documenting it.  Not required for Row
+            D.
+
+
+-------------------------------------------------------------------------------
+M10. THE PER-ELEMENT SHARED COUNT OF 2
+-------------------------------------------------------------------------------
+  CLASS     ASSERTED as a conjecture; currently pinned TEMPORARY in
+            test/Phase0_Characterization_test.cpp:282.
+  CLAIM     The H(div)/H(curl) per-paired-element shared count of 2 in 2D is the
+            correct degree-dependent trace count, not a symptom of a defect.
+  CONJECTURE  For a degree-p 2D de Rham pair the interface-tangential component
+            carries degree p-1, giving p functions per element; so the count
+            should track 2 -> 3 -> 4 for p = 2, 3, 4.
+  NOT PROVED  The degree relation has not been measured, and the component
+            convention of this codebase has not been confirmed against it.  Do
+            not promote the TEMPORARY labels on the strength of the arithmetic
+            above; measure first, and measure on BOTH a reversing and a
+            non-reversing side pair so the count is not accidentally tied to one
+            orientation class - side-blindness was the entire Stage 2 defect
+            class, and measuring one class only would repeat that error.
+  ENOUGH WOULD BE  The degree sweep, plus a dimension count of the interface
+            trace space to confirm the relation rather than curve-fit it.
+
+
+-------------------------------------------------------------------------------
+M11. THE REFERENCE PAPER CORROBORATES; IT DOES NOT PROVE
+-------------------------------------------------------------------------------
+  CLASS     MEASURED (by probes), with independent literature agreement.
+  NOTE      arXiv:2608.29545 has been checked against the full PDF and the
+            quoted claims are present as quoted.  The code probes remain the
+            PRIMARY evidence: every claim attributed to the paper is
+            independently corroborated by probe 4 or probe 5.  The paper
+            describes a construction the implementation resembles; it does not
+            certify this implementation.  Kept here so the direction of support
+            is not inverted later.
+
+
+-------------------------------------------------------------------------------
+HOW TO USE THIS FILE
+-------------------------------------------------------------------------------
+  - When closing a row in outstanding_issues.txt that depends on an item here,
+    state the evidence class in the closure text.  A row closed on MEASURED
+    evidence is closed narrowly, and should say so.
+  - Never promote ARGUED-FROM-CODE to EXHAUSTIVELY VERIFIED or beyond on
+    fixture evidence.  Fixtures refute; they do not prove.  M1 is the live
+    example.
+  - Distinguish continuous conformity from implementation coverage every time.
+    An analytic argument about the first is not evidence about the second.
+  - A fixture that passes is only informative if it was shown to exercise the
+    mechanism in question.  Establish the topology FIRST, separately, with its
+    own assertions - and assert every intended constraint, not just the final
+    equivalence class (M4).
+  - When an item here is settled, move the proof or the derivation into this
+    file and change the class.  Do not delete the item; the history of what was
+    once merely believed is the point.
+
+
+-------------------------------------------------------------------------------
+REVISION LOG
+-------------------------------------------------------------------------------
+  2026-10-01  Created with eleven items.
+  2026-10-05  Review corrections, all accepted:
+    - M4: "cocycle condition" was vacuous on a graph; restated as exactness /
+      coboundary / trivial class in H^1(G; Z_2).  Added the spanning-tree gauge
+      reading of UnionFind and the resulting completeness result, then NARROWED
+      it: completeness is relative to the supplied constraint graph, and final
+      equivalence-class data does not show the supplied graph is the intended
+      one.  Added the six required fixture assertions and the tree corollary.
+    - Evidence classes: PROVED-BY-EXHAUSTION renamed EXHAUSTIVELY VERIFIED;
+      DEFINITIONAL added.  M8 reclassified.
+    - M2: retitled.  Face generation recognised as DEFINITIONAL via the
+      phi-orbit quotient; former (c) and the proposed validation hook struck;
+      blockLayout audited; residue narrowed to two producers.
+    - M5: split by coordinate block.  The independent comparison reaches the
+      TANGENTIAL block only; the normal branch of the factor term stays open,
+      so M5 may not be closed on H(curl) evidence.
+    - M1, M3: added the continuous-conformity vs implementation-coverage
+      distinction, promoted to a standing distinction in the preamble.  M1's
+      transitivity argument sharpened to require face gluings CONTAINING the
+      edge.
+    - M6: marked explicitly NOT A GATE, retained as a methodological note.

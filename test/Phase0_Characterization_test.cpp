@@ -332,7 +332,8 @@ TEST_CASE( "EXPERIMENT B: elementwise cross-patch correspondence, 3d permutation
         CHECK( hcurl_obs.front().a_cols == 21 );
         CHECK( hcurl_obs.front().shared == 12 );
 
-        // TEMPORARY (row D): extraction column order.  Only ZeroToZero agrees
+        // TEMPORARY (step e, reassigned from row D 2026-10-05): extraction
+        // column order.  Only ZeroToZero agrees
         // under identity and only ZeroToTwo under reversal for H1; the vector
         // spaces agree under neither, so sign/direction handling is missing
         // beyond reordering.  MEASURED UNCHANGED by the Stage 2 transform:
