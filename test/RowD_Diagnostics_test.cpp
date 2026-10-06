@@ -15,9 +15,17 @@
 #include <string>
 #include <VectorConformingMultiPatchSplineSpace.hpp>
 #include <algorithm>
+#include <limits>
 #include <iostream>
 #include <set>
 #include <vector>
+#include <SideCoordinateTransform.hpp>
+#include <IndexOperations.hpp>
+#include <UnionFind.hpp>
+#include <VectorConformingTPSplineSpace.hpp>
+#include <tuple>
+#include <sstream>
+#include <limits>
 
 using namespace basis;
 using namespace topology;
@@ -280,6 +288,40 @@ namespace
                  { { 1, Dart( 8 ) }, { 2, Dart( 22 ) } },
                  { { 1, Dart( 16 ) }, { 3, Dart( 2 ) } },
                  { { 2, Dart( 16 ) }, { 3, Dart( 8 ) } } };
+    }
+
+    // The same four patches with the 0-1 interface re-glued a quarter turn, so
+    // that its side coordinate transform reverses a tangential axis.  Chosen by
+    // exhaustive dart search: of the 1536 single-slot perturbations that keep
+    // all six interfaces, 1152 reverse some axis and 40 of those both place a
+    // reversing interface on a non-tree edge and admit the spline spaces.  M4
+    // assertion 4 is only discriminating on a reversing fixture like this one.
+    // Assertion 6 needs more and is NOT met here; see reversingRingConnections.
+    DartConnections reversingFourPatchConnections()
+    {
+        DartConnections conns = fourPatchConnections();
+        conns.erase( std::pair<size_t, Dart>{ 0, Dart( 0 ) } );
+        conns.emplace( std::pair<size_t, Dart>{ 0, Dart( 1 ) }, std::pair<size_t, Dart>{ 1, Dart( 3 ) } );
+        return conns;
+    }
+
+    // A three-patch RING around one common edge, with two of its three
+    // interfaces reversing the edge direction.  A MINIMAL fixture satisfying
+    // M4 assertion 6, not the only cyclic topology that could; what it has to
+    // supply is structural.  An H(curl) component is conforming on a face only
+    // when its index is a tangential axis of that face, and a patch meets an
+    // edge in two faces with distinct normals, so the ONLY component
+    // constrained across both is the one along the edge direction.  A cycle of
+    // G at an edge junction is therefore built from edge-direction DOFs alone,
+    // and a flip on that cycle needs the reversal to fall on the
+    // edge-direction axis.  Reversing some other tangential axis - as the
+    // four-patch fixture above does - produces flips that are all bridges.
+    // Found by exhaustive dart search over rings.
+    DartConnections reversingRingConnections()
+    {
+        return { { { 0, Dart( 7 ) }, { 1, Dart( 19 ) } },
+                 { { 1, Dart( 0 ) }, { 2, Dart( 3 ) } },
+                 { { 2, Dart( 7 ) }, { 0, Dart( 12 ) } } };
     }
 
     using PatchPair = std::pair<size_t, size_t>;
@@ -597,4 +639,797 @@ TEST_CASE( "STEP 5: swept three-patch 3d fixture topology", "[rowd]" )
     CHECK( n_global_edges == 25 );
     CHECK( merges == 11 );
     CHECK( n_global_edges + merges == 3 * 12 );
+}
+
+// ---------------------------------------------------------------------------
+// STEP 6: the H(curl) face-level dof constraints, their global ids and their
+// orientations.  Covers M4's required assertions 3, 4 and 6, on both of the
+// step 5 fixtures.
+//
+// The expected constraint set is derived from sideCoordinateTransform plus the
+// de Rham tangential rule.  It reads neither coordinateTransform nor
+// getIterVars -- the two production paths under examination (M5).  Every
+// constraint is keyed by the actual pair of ConstituentSides, so nothing here
+// inherits step 5's one-interface-per-patch-pair simplification.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // tangentialAxes, restated from MultiPatchSplineSpace.cpp:18, which is
+    // file-local there.  Side-local tangential axis d is the d-th patch axis
+    // other than the side's normal axis, ascending.
+    std::vector<size_t> tangentialAxes( const size_t dim, const size_t side_id )
+    {
+        std::vector<size_t> axes;
+        for( size_t axis = 0; axis < dim; axis++ )
+            if( axis != side_id / 2 ) axes.push_back( axis );
+        return axes;
+    }
+
+    // Per-axis function counts of every vector component of one patch.
+    using ComponentLengths = std::vector<std::vector<size_t>>;
+
+    ComponentLengths componentLengths( const VectorConformingTPSplineSpace& ss )
+    {
+        ComponentLengths out;
+        for( size_t k = 0; k < ss.numVectorComponents(); k++ )
+        {
+            std::vector<size_t> lengths;
+            for( const auto& basis_1d : tensorProductComponentSplines( *ss.scalarTPBases().at( k ) ) )
+                lengths.push_back( basis_1d->numFunctions() );
+            out.push_back( lengths );
+        }
+        return out;
+    }
+
+    size_t blockSize( const std::vector<size_t>& lengths )
+    {
+        size_t n = 1;
+        for( const size_t m : lengths ) n *= m;
+        return n;
+    }
+
+    // Patch-local function id: the components are consecutive blocks, each
+    // flattened over its own per-axis index.  Restated from the offset
+    // arithmetic in VectorConformingMultiPatchSplineSpace.cpp.
+    size_t localFid( const ComponentLengths& lengths, const size_t comp, const std::vector<size_t>& index )
+    {
+        size_t offset = 0;
+        for( size_t k = 0; k < comp; k++ ) offset += blockSize( lengths.at( k ) );
+
+        util::IndexVec iv, lens;
+        for( size_t a = 0; a < index.size(); a++ )
+        {
+            iv.push_back( index.at( a ) );
+            lens.push_back( lengths.at( comp ).at( a ) );
+        }
+        return offset + util::flatten( iv, lens );
+    }
+
+    // Side extents of one component on one side, in tangentialAxes order.
+    std::vector<size_t> sideExtents( const ComponentLengths& lengths, const size_t comp, const size_t side_id )
+    {
+        std::vector<size_t> out;
+        for( const size_t a : tangentialAxes( lengths.at( comp ).size(), side_id ) )
+            out.push_back( lengths.at( comp ).at( a ) );
+        return out;
+    }
+
+    // The face-supported functions of one component on one side, keyed by side
+    // index.  The knot vectors are open with interior multiplicity p, so
+    // exactly one function is nonzero at each end of an axis and the normal
+    // index is pinned.
+    std::map<std::vector<size_t>, size_t>
+        faceFunctions( const ComponentLengths& lengths, const size_t comp, const size_t side_id )
+    {
+        const std::vector<size_t>& lens = lengths.at( comp );
+        const size_t normal_axis = side_id / 2;
+        // Side ids run S1, S0, T1, T0, U1, U0 -- the EVEN id of an axis is its
+        // upper side.  See MultiPatchCombinatorialMap.cpp:25.
+        const size_t pinned = ( side_id % 2 == 0 ) ? lens.at( normal_axis ) - 1 : 0;
+        const std::vector<size_t> tang = tangentialAxes( lens.size(), side_id );
+
+        std::map<std::vector<size_t>, size_t> out;
+        for( size_t i = 0; i < lens.at( tang.at( 0 ) ); i++ )
+        {
+            for( size_t j = 0; j < lens.at( tang.at( 1 ) ); j++ )
+            {
+                std::vector<size_t> index( lens.size(), 0 );
+                index.at( normal_axis ) = pinned;
+                index.at( tang.at( 0 ) ) = i;
+                index.at( tang.at( 1 ) ) = j;
+                out.emplace( std::vector<size_t>{ i, j }, localFid( lengths, comp, index ) );
+            }
+        }
+        return out;
+    }
+
+    // One intended face-level constraint, independently derived.
+    struct Constraint
+    {
+        SideKey side_key{};
+        size_t patch_a = 0, local_a = 0, comp_a = 0;
+        size_t patch_b = 0, local_b = 0, comp_b = 0;
+        bool aligned = true; // expected relative sign; true == same sign
+    };
+
+    // The face-level pairings between one component on side a and one component
+    // on side b, under an already-derived side coordinate transform.
+    std::vector<Constraint> pairFaceFunctions( const ConstituentSide& a,
+                                               const SideCoordinateTransform& t,
+                                               const ConstituentSide& b,
+                                               const ComponentLengths& la,
+                                               const ComponentLengths& lb,
+                                               const size_t comp_a,
+                                               const size_t comp_b,
+                                               const bool aligned )
+    {
+        const std::vector<size_t> ext_a = sideExtents( la, comp_a, a.side_id );
+        const std::vector<size_t> ext_b = sideExtents( lb, comp_b, b.side_id );
+        // The reduced-degree direction has to line up under the transform.
+        REQUIRE( transformedExtents( t, ext_a ) == ext_b );
+
+        const auto faces_a = faceFunctions( la, comp_a, a.side_id );
+        const auto faces_b = faceFunctions( lb, comp_b, b.side_id );
+
+        std::vector<Constraint> out;
+        for( const auto& [idx_a, fid_a] : faces_a )
+        {
+            Constraint c;
+            c.side_key = makeSideKey( a, b );
+            c.patch_a = a.constituent_id;
+            c.local_a = fid_a;
+            c.comp_a = comp_a;
+            c.patch_b = b.constituent_id;
+            c.local_b = faces_b.at( transformSideIndex( t, idx_a, ext_a ) );
+            c.comp_b = comp_b;
+            c.aligned = aligned;
+            out.push_back( c );
+        }
+        return out;
+    }
+
+    // The intended constraints across one declared interface.  conforming_comps
+    // names, per destination tangential position d, the pair of components that
+    // must merge.  For H(curl) those are the two tangential components, paired
+    // by the axis correspondence; for H(div) the single normal one.
+    std::vector<Constraint> interfaceConstraints(
+        const ConstituentSide& a,
+        const TPPermutation perm,
+        const ConstituentSide& b,
+        const std::vector<ComponentLengths>& patch_lengths,
+        const ConformingType conforming_type )
+    {
+        constexpr size_t dim = 3;
+        const SideCoordinateTransform t = sideCoordinateTransform( dim, a.side_id, b.side_id, perm );
+        const std::vector<size_t> src_axes = tangentialAxes( dim, a.side_id );
+        const std::vector<size_t> dst_axes = tangentialAxes( dim, b.side_id );
+        const ComponentLengths& la = patch_lengths.at( a.constituent_id );
+        const ComponentLengths& lb = patch_lengths.at( b.constituent_id );
+
+        // (comp_a, comp_b, expected relative sign).
+        std::vector<std::array<size_t, 2>> comp_pairs;
+        std::vector<bool> comp_aligned;
+        if( conforming_type == ConformingType::Curl )
+        {
+            // De Rham tangential rule: the conforming components on a face are
+            // exactly those whose component index is a tangential axis.  A
+            // component along a reversed tangential axis changes sign, so the
+            // expected relative sign is that axis's reversal flag.
+            for( size_t d = 0; d < dst_axes.size(); d++ )
+            {
+                comp_pairs.push_back( { src_axes.at( t.source_axis_for_destination.at( d ) ), dst_axes.at( d ) } );
+                comp_aligned.push_back( not t.source_axis_reversed.at( d ) );
+            }
+        }
+        else
+        {
+            // Face-normal control only.  The contravariant sign depends on the
+            // whole face map rather than one axis, so no sign is predicted here
+            // and the caller does not assert one.
+            comp_pairs.push_back( { a.side_id / 2, b.side_id / 2 } );
+            comp_aligned.push_back( true );
+        }
+
+        std::vector<Constraint> out;
+        for( size_t c_ii = 0; c_ii < comp_pairs.size(); c_ii++ )
+        {
+            const auto one = pairFaceFunctions( a, t, b, la, lb, comp_pairs.at( c_ii ).at( 0 ),
+                                                comp_pairs.at( c_ii ).at( 1 ), comp_aligned.at( c_ii ) );
+            out.insert( out.end(), one.begin(), one.end() );
+        }
+        return out;
+    }
+
+    // The scalar analogue, used to validate the enumeration above against the
+    // scalar multipatch merge before it is used to judge the vector merge.
+    std::vector<Constraint> scalarConstraints( const ConstituentSide& a,
+                                               const TPPermutation perm,
+                                               const ConstituentSide& b,
+                                               const std::vector<ComponentLengths>& patch_lengths )
+    {
+        const SideCoordinateTransform t = sideCoordinateTransform( 3, a.side_id, b.side_id, perm );
+        return pairFaceFunctions( a, t, b, patch_lengths.at( a.constituent_id ),
+                                  patch_lengths.at( b.constituent_id ), 0, 0, true );
+    }
+}
+
+namespace
+{
+    // What the comparison against production measured.
+    struct MergeObs
+    {
+        size_t n_local = 0;        // summed patch-local functions
+        size_t n_global = 0;       // production's global count
+        size_t n_global_expected = 0; // the independent closure's count
+        size_t n_constraints = 0;
+        size_t n_misaligned = 0;   // constraints whose expected sign is a flip
+        // Both mismatch counts below are per LOCAL ENTRY, and id_mismatch is
+        // additionally per direction, so neither is a count of classes.
+        size_t id_mismatch = 0;
+        size_t sign_mismatch = 0;
+        size_t sign_mismatch_classes = 0; // distinct classes holding a disagreement
+    };
+
+    std::vector<size_t> patchOffsets( const std::vector<ComponentLengths>& patch_lengths )
+    {
+        std::vector<size_t> offsets{ 0 };
+        for( const ComponentLengths& cl : patch_lengths )
+        {
+            size_t n = 0;
+            for( const std::vector<size_t>& lens : cl ) n += blockSize( lens );
+            offsets.push_back( offsets.back() + n );
+        }
+        return offsets;
+    }
+
+    // Per-constraint id and sign comparison (M4 assertions 3 and 4), then the
+    // partition as a whole.  The whole-partition part closes the independent
+    // constraint set with a union-find and compares the resulting equivalence
+    // relation to production's, in BOTH directions, so over-merging and
+    // under-merging are both visible.  util::UnionFind is reused there only as
+    // a generic transitive-closure utility; the quantity under test is the
+    // constraint set, which is derived independently.
+    MergeObs compareMerge( const VectorConformingMultiPatchSplineSpace& space,
+                           const std::vector<ComponentLengths>& patch_lengths,
+                           const std::vector<Constraint>& constraints,
+                           const bool assert_signs )
+    {
+        MergeObs o;
+        const std::vector<size_t> offsets = patchOffsets( patch_lengths );
+        o.n_local = offsets.back();
+        o.n_global = space.numFunctions();
+        o.n_constraints = constraints.size();
+
+        const auto& fid_map = space.functionIdMap();
+
+        // M4 assertions 3 and 4, one check per intended face-level pairing.
+        for( const Constraint& c : constraints )
+        {
+            if( not c.aligned ) o.n_misaligned++;
+            const auto& [gid_a, or_a] = fid_map.at( c.patch_a ).at( c.local_a );
+            const auto& [gid_b, or_b] = fid_map.at( c.patch_b ).at( c.local_b );
+            CHECK( gid_a == gid_b );
+            if( assert_signs ) CHECK( ( or_a == or_b ) == c.aligned );
+        }
+
+        util::UnionFind uf( o.n_local );
+        for( const Constraint& c : constraints )
+        {
+            REQUIRE_NOTHROW( uf.unite( offsets.at( c.patch_a ) + c.local_a,
+                                       offsets.at( c.patch_b ) + c.local_b,
+                                       c.aligned ) );
+        }
+        o.n_global_expected = uf.numSets();
+
+        // Partition equality.  class_gauge is the per-class sign offset between
+        // the two conventions; it must be constant on a class exactly when the
+        // relative signs agree throughout it.
+        std::map<size_t, size_t> root_to_gid;
+        std::map<size_t, size_t> gid_to_root;
+        std::map<size_t, bool> class_gauge;
+        std::set<size_t> sign_bad_roots;
+        for( size_t patch_ii = 0; patch_ii < patch_lengths.size(); patch_ii++ )
+        {
+            for( size_t local_ii = 0; local_ii < fid_map.at( patch_ii ).size(); local_ii++ )
+            {
+                const auto& [gid, orientation] = fid_map.at( patch_ii ).at( local_ii );
+                const auto [root, parity] = uf.findWithOrientation( offsets.at( patch_ii ) + local_ii );
+                const size_t gid_val = static_cast<size_t>( gid.id() );
+
+                root_to_gid.try_emplace( root, gid_val );
+                gid_to_root.try_emplace( gid_val, root );
+                class_gauge.try_emplace( root, parity != orientation );
+
+                if( root_to_gid.at( root ) != gid_val ) o.id_mismatch++;
+                if( gid_to_root.at( gid_val ) != root ) o.id_mismatch++;
+                if( class_gauge.at( root ) != ( parity != orientation ) )
+                {
+                    o.sign_mismatch++;
+                    sign_bad_roots.insert( root );
+                }
+            }
+        }
+        o.sign_mismatch_classes = sign_bad_roots.size();
+        return o;
+    }
+
+    // The declared interfaces, one entry per unordered side pair.
+    std::vector<std::tuple<ConstituentSide, TPPermutation, ConstituentSide>>
+        declaredInterfaces( const MultiPatchCombinatorialMap& mp )
+    {
+        std::vector<std::tuple<ConstituentSide, TPPermutation, ConstituentSide>> out;
+        for( const auto& [first, connection] : mp.connections() )
+        {
+            const auto& [permutation, second] = connection;
+            if( not( first < second ) ) continue;
+            out.push_back( { first, permutation, second } );
+        }
+        return out;
+    }
+
+    MultiPatchSplineSpace buildPrimalFromDarts( const size_t n_patches, const DartConnections& conns )
+    {
+        const KnotVector kv( { 0, 0, 0, 1, 1, 1 }, ptol );
+        const auto ss_tp = std::make_shared<const TPSplineSpace>( buildBSpline( { kv, kv, kv }, { 2, 2, 2 } ) );
+        return buildMultiPatchSplineSpace(
+            std::vector<std::shared_ptr<const TPSplineSpace>>( n_patches, ss_tp ), conns );
+    }
+
+    MultiPatchSplineSpace buildPrimalFromSides( const size_t n_patches, const InternalConnectionsMap& conns )
+    {
+        const KnotVector kv( { 0, 0, 0, 1, 1, 1 }, ptol );
+        const auto ss_tp = std::make_shared<const TPSplineSpace>( buildBSpline( { kv, kv, kv }, { 2, 2, 2 } ) );
+        return buildMultiPatchSplineSpace(
+            std::vector<std::shared_ptr<const TPSplineSpace>>( n_patches, ss_tp ), conns );
+    }
+
+    std::vector<ComponentLengths> lengthsOf( const VectorConformingMultiPatchSplineSpace& space )
+    {
+        std::vector<ComponentLengths> out;
+        for( const auto& patch : space.subSpaces() ) out.push_back( componentLengths( *patch ) );
+        return out;
+    }
+
+    void reportMerge( const std::string& label, const MergeObs& o )
+    {
+        std::cout << "  " << label << ": local " << o.n_local << ", global " << o.n_global << " (expected "
+                  << o.n_global_expected << "), constraints " << o.n_constraints << " of which "
+                  << o.n_misaligned << " sign-flipping; id mismatch entries " << o.id_mismatch
+                  << ", sign mismatch entries " << o.sign_mismatch << " in "
+                  << o.sign_mismatch_classes << " classes" << std::endl;
+    }
+}
+
+namespace
+{
+    // M4's graph G itself: vertices are (patch, local function), edges are the
+    // generated constraints.  An edge lying on a CYCLE of G is a co-tree edge
+    // under some spanning forest, so it is an edge whose parity test is the
+    // non-vacuous one; a BRIDGE carries no such test.  This is the quantity M4
+    // assertion 6 asks about.  Keying on the interface SideKey instead would
+    // only show that a reversing INTERFACE touches a cyclic topological edge,
+    // which does not imply that any particular DOF constraint of that
+    // interface lies on a cycle of G -- most are face-interior.
+    struct CycleObs
+    {
+        size_t n_edges = 0;
+        size_t n_nonbridge = 0;      // edges of G lying on some cycle
+        size_t n_flip_nonbridge = 0; // sign-flipping edges lying on some cycle
+        size_t max_patches = 0;      // patches in the richest such component
+        size_t max_sides = 0;        // declared interfaces in that component
+    };
+
+    CycleObs dofCycleObs( const std::vector<Constraint>& constraints, const std::vector<size_t>& offsets )
+    {
+        constexpr size_t none = std::numeric_limits<size_t>::max();
+        const size_t n_v = offsets.back();
+
+        std::vector<std::vector<std::pair<size_t, size_t>>> adj( n_v ); // (neighbour, edge id)
+        std::vector<std::array<size_t, 2>> ends;
+        for( const Constraint& c : constraints )
+        {
+            const size_t u = offsets.at( c.patch_a ) + c.local_a;
+            const size_t v = offsets.at( c.patch_b ) + c.local_b;
+            adj.at( u ).push_back( { v, ends.size() } );
+            adj.at( v ).push_back( { u, ends.size() } );
+            ends.push_back( { u, v } );
+        }
+
+        // Tarjan low-link.  The traversed EDGE is skipped rather than the
+        // parent vertex, so parallel constraints correctly register a cycle.
+        std::vector<size_t> disc( n_v, none ), low( n_v, none ), comp( n_v, none );
+        std::vector<bool> is_bridge( ends.size(), false );
+        size_t timer = 0, n_comp = 0;
+        for( size_t root = 0; root < n_v; root++ )
+        {
+            if( disc.at( root ) != none ) continue;
+            const size_t this_comp = n_comp++;
+            disc.at( root ) = low.at( root ) = timer++;
+            comp.at( root ) = this_comp;
+            // Explicit stack of (vertex, entry edge, next adjacency index).
+            std::vector<std::array<size_t, 3>> stack{ { root, none, 0 } };
+            while( not stack.empty() )
+            {
+                const size_t top = stack.size() - 1;
+                const size_t u = stack.at( top ).at( 0 );
+                const size_t in_edge = stack.at( top ).at( 1 );
+                const size_t ii = stack.at( top ).at( 2 );
+                if( ii < adj.at( u ).size() )
+                {
+                    stack.at( top ).at( 2 ) = ii + 1;
+                    const auto [v, e] = adj.at( u ).at( ii );
+                    if( e == in_edge ) continue;
+                    if( disc.at( v ) == none )
+                    {
+                        disc.at( v ) = low.at( v ) = timer++;
+                        comp.at( v ) = this_comp;
+                        stack.push_back( { v, e, 0 } );
+                    }
+                    else low.at( u ) = std::min( low.at( u ), disc.at( v ) );
+                }
+                else
+                {
+                    stack.pop_back();
+                    if( stack.empty() ) continue;
+                    const size_t parent = stack.back().at( 0 );
+                    low.at( parent ) = std::min( low.at( parent ), low.at( u ) );
+                    if( low.at( u ) > disc.at( parent ) ) is_bridge.at( in_edge ) = true;
+                }
+            }
+        }
+
+        // Which patch each vertex belongs to, and what each component holds.
+        std::map<size_t, std::set<size_t>> comp_patches;
+        for( size_t v = 0; v < n_v; v++ )
+        {
+            if( comp.at( v ) == none ) continue;
+            const size_t patch =
+                std::upper_bound( offsets.begin(), offsets.end(), v ) - offsets.begin() - 1;
+            comp_patches[comp.at( v )].insert( patch );
+        }
+        std::map<size_t, std::set<SideKey>> comp_sides;
+        for( size_t e = 0; e < ends.size(); e++ )
+            comp_sides[comp.at( ends.at( e ).at( 0 ) )].insert( constraints.at( e ).side_key );
+
+        CycleObs o;
+        o.n_edges = ends.size();
+        for( size_t e = 0; e < ends.size(); e++ )
+        {
+            if( is_bridge.at( e ) ) continue;
+            o.n_nonbridge++;
+            if( constraints.at( e ).aligned ) continue;
+            o.n_flip_nonbridge++;
+            const size_t c = comp.at( ends.at( e ).at( 0 ) );
+            o.max_patches = std::max( o.max_patches, comp_patches.at( c ).size() );
+            o.max_sides = std::max( o.max_sides, comp_sides.at( c ).size() );
+        }
+        return o;
+    }
+
+    CycleObs curlCycles( const MultiPatchSplineSpace& primal, const MultiPatchCombinatorialMap& mp )
+    {
+        const auto space = buildHCurlMultiPatchSplineSpace( primal );
+        const std::vector<ComponentLengths> lengths = lengthsOf( space );
+        std::vector<Constraint> constraints;
+        for( const auto& [a, perm, b] : declaredInterfaces( mp ) )
+        {
+            const auto one = interfaceConstraints( a, perm, b, lengths, ConformingType::Curl );
+            constraints.insert( constraints.end(), one.begin(), one.end() );
+        }
+        return dofCycleObs( constraints, patchOffsets( lengths ) );
+    }
+
+    void reportCycles( const CycleObs& o )
+    {
+        std::cout << "  G: " << o.n_edges << " constraint edges, " << o.n_nonbridge
+                  << " on cycles, of which sign-flipping " << o.n_flip_nonbridge;
+        if( o.n_flip_nonbridge > 0 )
+            std::cout << "; richest such component spans " << o.max_patches << " patches and "
+                      << o.max_sides << " interfaces";
+        std::cout << std::endl;
+    }
+
+    // Everything step 6 asserts for one fixture and one conforming type.
+    MergeObs runStep6( const std::string& label,
+                       const MultiPatchSplineSpace& primal,
+                       const MultiPatchCombinatorialMap& mp,
+                       const ConformingType conforming_type )
+    {
+        const VectorConformingMultiPatchSplineSpace space =
+            conforming_type == ConformingType::Curl ? buildHCurlMultiPatchSplineSpace( primal )
+                                                    : buildHDivMultiPatchSplineSpace( primal );
+        const std::vector<ComponentLengths> patch_lengths = lengthsOf( space );
+
+        std::vector<Constraint> constraints;
+        for( const auto& [a, perm, b] : declaredInterfaces( mp ) )
+        {
+            const auto one = interfaceConstraints( a, perm, b, patch_lengths, conforming_type );
+            constraints.insert( constraints.end(), one.begin(), one.end() );
+        }
+
+        // The sign expectation is derived only for H(curl); H(div) is an id and
+        // partition control.
+        const bool assert_signs = conforming_type == ConformingType::Curl;
+        const MergeObs o = compareMerge( space, patch_lengths, constraints, assert_signs );
+        reportMerge( label, o );
+        CHECK( o.id_mismatch == 0 );
+        CHECK( o.n_global == o.n_global_expected );
+        // Only H(curl) has an independently derived sign here.  H(div)'s
+        // contravariant sign is not predicted, so its relative signs are
+        // reported and NOT asserted; the observed nonzero count is recorded in
+        // the ledger, not pinned.
+        if( assert_signs ) CHECK( o.sign_mismatch == 0 );
+        return o;
+    }
+}
+
+TEST_CASE( "STEP 6: H(curl) face constraints on the four-patch 3d fixture", "[rowd]" )
+{
+    const DartConnections declared = fourPatchConnections();
+    const auto mp = buildMultiPatch3d( 4, declared );
+    const MultiPatchSplineSpace primal = buildPrimalFromDarts( 4, declared );
+
+    std::cout << "STEP 6: four-patch 3d fixture" << std::endl;
+
+    const auto curl_space = buildHCurlMultiPatchSplineSpace( primal );
+    const auto lengths = lengthsOf( curl_space );
+    std::cout << "  H(curl) per-component per-axis function counts, patch 0:" << std::endl;
+    for( size_t k = 0; k < lengths.at( 0 ).size(); k++ )
+    {
+        std::cout << "    component " << k << ":";
+        for( const size_t n : lengths.at( 0 ).at( k ) ) std::cout << " " << n;
+        std::cout << std::endl;
+    }
+
+    const MergeObs curl = runStep6( "H(curl)", primal, *mp, ConformingType::Curl );
+    runStep6( "H(div) control", primal, *mp, ConformingType::Divergence );
+
+    const CycleObs cyc = curlCycles( primal, *mp );
+    reportCycles( cyc );
+
+    // G has co-tree edges here, so the union-find's parity test is not vacuous
+    // on this fixture for structural reasons.  What is missing is a nonzero
+    // cochain to test it with; see below.
+    CHECK( cyc.n_nonbridge > 0 );
+
+    // PERMANENT characterization of THIS fixture, not a defect: every declared
+    // interface here has source_axis_reversed == {0,0}, so every expected
+    // H(curl) relative sign is "aligned".  Assertions 4 and 6 are therefore
+    // vacuous on this fixture; assertion 4 is discriminating on the reversing
+    // four-patch fixture below, assertion 6 only on the reversing ring.  These
+    // zeros guard against a future edit silently making this fixture reversing
+    // and so changing what the sign-trivial baseline measures.
+    CHECK( cyc.n_flip_nonbridge == 0 );
+    CHECK( curl.n_misaligned == 0 );
+}
+
+TEST_CASE( "STEP 6: H(curl) face constraints on the swept three-patch 3d fixture", "[rowd]" )
+{
+    const InternalConnectionsMap conns = connectionsOfSweptMultipatch( threePatchRing2d() );
+    const auto mp = buildMultiPatch3dFromSides( 3, conns );
+    const MultiPatchSplineSpace primal = buildPrimalFromSides( 3, conns );
+
+    std::cout << "STEP 6: swept three-patch 3d fixture" << std::endl;
+
+    const MergeObs curl = runStep6( "H(curl)", primal, *mp, ConformingType::Curl );
+    runStep6( "H(div) control", primal, *mp, ConformingType::Divergence );
+
+    const CycleObs cyc = curlCycles( primal, *mp );
+    reportCycles( cyc );
+    CHECK( cyc.n_nonbridge > 0 );
+
+    // PERMANENT, as above: this fixture is sign-trivial too.
+    CHECK( cyc.n_flip_nonbridge == 0 );
+    CHECK( curl.n_misaligned == 0 );
+}
+
+namespace
+{
+    // Oracle self-check.  The same enumeration, index transform and local-id
+    // layout, applied to the scalar H1 space, must reproduce the scalar
+    // multipatch merge exactly.  MultiPatchSplineSpace_test's test_c0 certifies
+    // that merge by evaluation for FIXTURE A's pinned 65-function case ONLY;
+    // agreement on B, C and D is cross-implementation consistency, which is
+    // weaker.  A disagreement here would localise the fault in this file's
+    // enumeration rather than in the vector merge.
+    struct ScalarObs
+    {
+        size_t n_local = 0;
+        size_t n_global = 0;
+        size_t n_global_expected = 0;
+        size_t n_constraints = 0;
+        size_t id_mismatch = 0;
+    };
+
+    ScalarObs compareScalarMerge( const MultiPatchSplineSpace& primal, const MultiPatchCombinatorialMap& mp )
+    {
+        // One "component" per patch, the full-degree scalar basis.
+        std::vector<ComponentLengths> patch_lengths;
+        for( const auto& patch : primal.subSpaces() )
+        {
+            std::vector<size_t> lengths;
+            for( const auto& basis_1d : tensorProductComponentSplines( *patch ) )
+                lengths.push_back( basis_1d->numFunctions() );
+            patch_lengths.push_back( ComponentLengths{ lengths } );
+        }
+
+        std::vector<Constraint> constraints;
+        for( const auto& [a, perm, b] : declaredInterfaces( mp ) )
+        {
+            const auto one = scalarConstraints( a, perm, b, patch_lengths );
+            constraints.insert( constraints.end(), one.begin(), one.end() );
+        }
+
+        ScalarObs o;
+        const std::vector<size_t> offsets = patchOffsets( patch_lengths );
+        o.n_local = offsets.back();
+        o.n_global = primal.numFunctions();
+        o.n_constraints = constraints.size();
+
+        util::UnionFind uf( o.n_local );
+        for( const Constraint& c : constraints )
+            uf.unite( offsets.at( c.patch_a ) + c.local_a, offsets.at( c.patch_b ) + c.local_b, true );
+        o.n_global_expected = uf.numSets();
+
+        const auto& fid_map = primal.functionIdMap();
+        std::map<size_t, size_t> root_to_gid, gid_to_root;
+        for( size_t patch_ii = 0; patch_ii < patch_lengths.size(); patch_ii++ )
+        {
+            for( size_t local_ii = 0; local_ii < fid_map.at( patch_ii ).size(); local_ii++ )
+            {
+                const size_t gid = static_cast<size_t>( fid_map.at( patch_ii ).at( local_ii ).id() );
+                const auto [root, parity] = uf.findWithOrientation( offsets.at( patch_ii ) + local_ii );
+                (void)parity;
+                root_to_gid.try_emplace( root, gid );
+                gid_to_root.try_emplace( gid, root );
+                if( root_to_gid.at( root ) != gid ) o.id_mismatch++;
+                if( gid_to_root.at( gid ) != root ) o.id_mismatch++;
+            }
+        }
+        return o;
+    }
+
+    void reportTransforms( const MultiPatchCombinatorialMap& mp )
+    {
+        for( const auto& [a, perm, b] : declaredInterfaces( mp ) )
+        {
+            const SideCoordinateTransform t = sideCoordinateTransform( 3, a.side_id, b.side_id, perm );
+            std::cout << "    " << a << " -> " << b << "  " << perm << "  src_for_dst = {"
+                      << t.source_axis_for_destination.at( 0 ) << "," << t.source_axis_for_destination.at( 1 )
+                      << "}  reversed = {" << t.source_axis_reversed.at( 0 ) << ","
+                      << t.source_axis_reversed.at( 1 ) << "}" << std::endl;
+        }
+    }
+}
+
+TEST_CASE( "STEP 6 PRECONDITION: the face enumeration reproduces the scalar merge", "[rowd]" )
+{
+    std::cout << "STEP 6 PRECONDITION: scalar merge agreement" << std::endl;
+
+    const DartConnections declared = fourPatchConnections();
+    const auto mp4 = buildMultiPatch3d( 4, declared );
+    const MultiPatchSplineSpace primal4 = buildPrimalFromDarts( 4, declared );
+    std::cout << "  four-patch interface transforms:" << std::endl;
+    reportTransforms( *mp4 );
+    const ScalarObs s4 = compareScalarMerge( primal4, *mp4 );
+    std::cout << "  four-patch: local " << s4.n_local << ", global " << s4.n_global << " (expected "
+              << s4.n_global_expected << "), constraints " << s4.n_constraints << ", id mismatches "
+              << s4.id_mismatch << std::endl;
+
+    const InternalConnectionsMap conns = connectionsOfSweptMultipatch( threePatchRing2d() );
+    const auto mp3 = buildMultiPatch3dFromSides( 3, conns );
+    const MultiPatchSplineSpace primal3 = buildPrimalFromSides( 3, conns );
+    std::cout << "  swept three-patch interface transforms:" << std::endl;
+    reportTransforms( *mp3 );
+    const ScalarObs s3 = compareScalarMerge( primal3, *mp3 );
+    std::cout << "  swept three-patch: local " << s3.n_local << ", global " << s3.n_global << " (expected "
+              << s3.n_global_expected << "), constraints " << s3.n_constraints << ", id mismatches "
+              << s3.id_mismatch << std::endl;
+
+    const DartConnections rev_declared = reversingFourPatchConnections();
+    const auto mpr = buildMultiPatch3d( 4, rev_declared );
+    const MultiPatchSplineSpace primalr = buildPrimalFromDarts( 4, rev_declared );
+    std::cout << "  reversing four-patch interface transforms:" << std::endl;
+    reportTransforms( *mpr );
+    const ScalarObs sr = compareScalarMerge( primalr, *mpr );
+    std::cout << "  reversing four-patch: local " << sr.n_local << ", global " << sr.n_global
+              << " (expected " << sr.n_global_expected << "), constraints " << sr.n_constraints
+              << ", id mismatches " << sr.id_mismatch << std::endl;
+
+    const DartConnections ring_declared = reversingRingConnections();
+    const auto mpring = buildMultiPatch3d( 3, ring_declared );
+    const MultiPatchSplineSpace primalring = buildPrimalFromDarts( 3, ring_declared );
+    std::cout << "  reversing three-patch ring interface transforms:" << std::endl;
+    reportTransforms( *mpring );
+    const ScalarObs sring = compareScalarMerge( primalring, *mpring );
+    std::cout << "  reversing ring: local " << sring.n_local << ", global " << sring.n_global
+              << " (expected " << sring.n_global_expected << "), constraints " << sring.n_constraints
+              << ", id mismatches " << sring.id_mismatch << std::endl;
+
+    CHECK( sring.n_local == 3 * 27 );
+    CHECK( sring.n_global_expected == sring.n_global );
+    CHECK( sring.id_mismatch == 0 );
+
+    // 65 is the value test_c0 pins in MultiPatchSplineSpace_test.cpp:353.
+    CHECK( s4.n_local == 4 * 27 );
+    CHECK( s4.n_global == 65 );
+    CHECK( s4.n_global_expected == s4.n_global );
+    CHECK( s4.id_mismatch == 0 );
+
+    CHECK( sr.n_local == 4 * 27 );
+    CHECK( sr.n_global_expected == sr.n_global );
+    CHECK( sr.id_mismatch == 0 );
+
+    CHECK( s3.n_local == 3 * 27 );
+    CHECK( s3.n_global_expected == s3.n_global );
+    CHECK( s3.id_mismatch == 0 );
+}
+
+TEST_CASE( "STEP 6: H(curl) face constraints on the reversing four-patch 3d fixture", "[rowd]" )
+{
+    const DartConnections declared = reversingFourPatchConnections();
+    const auto mp = buildMultiPatch3d( 4, declared );
+    const MultiPatchSplineSpace primal = buildPrimalFromDarts( 4, declared );
+
+    std::cout << "STEP 6: reversing four-patch 3d fixture" << std::endl;
+    reportTransforms( *mp );
+
+    CHECK( mp->connections().size() == 2 * declared.size() );
+
+    const MergeObs curl = runStep6( "H(curl)", primal, *mp, ConformingType::Curl );
+    runStep6( "H(div) control", primal, *mp, ConformingType::Divergence );
+
+    const CycleObs cyc = curlCycles( primal, *mp );
+    reportCycles( cyc );
+
+    // M4 assertion 4 is discriminating here: some expected relative signs are
+    // flips, so runStep6's sign comparison can distinguish correct sign
+    // handling from unconditional alignment.
+    CHECK( curl.n_misaligned > 0 );
+
+    // G has cycles here, but ASSERTION 6 IS NOT MET ON THIS FIXTURE, and the
+    // zero below is a measured structural fact rather than a defect.  This
+    // fixture reverses a tangential axis that is NOT the direction of any edge
+    // junction it carries, so all six of its flips are BRIDGES of G.  An
+    // interface-level test would wrongly read 6 here; see the comment on
+    // reversingRingConnections for why only the edge-direction component can
+    // lie on a cycle, and the ring fixture below for assertion 6 proper.
+    CHECK( cyc.n_nonbridge > 0 );
+    CHECK( cyc.n_flip_nonbridge == 0 );
+}
+
+TEST_CASE( "STEP 6: H(curl) face constraints on the reversing three-patch ring", "[rowd]" )
+{
+    const DartConnections declared = reversingRingConnections();
+    const auto mp = buildMultiPatch3d( 3, declared );
+    const MultiPatchSplineSpace primal = buildPrimalFromDarts( 3, declared );
+
+    std::cout << "STEP 6: reversing three-patch ring" << std::endl;
+    reportTransforms( *mp );
+
+    CHECK( mp->connections().size() == 2 * declared.size() );
+
+    const MergeObs curl = runStep6( "H(curl)", primal, *mp, ConformingType::Curl );
+    runStep6( "H(div) control", primal, *mp, ConformingType::Divergence );
+
+    const CycleObs cyc = curlCycles( primal, *mp );
+    reportCycles( cyc );
+
+    // Assertion 4, discriminating: some expected relative signs are flips.
+    CHECK( curl.n_misaligned > 0 );
+
+    // M4 ASSERTION 6, stated on G itself: at least one SIGN-FLIPPING constraint
+    // is a NON-BRIDGE edge of the DOF-constraint graph.  Only then is the
+    // parity cochain nonzero on some cycle, so the union-find's co-tree test is
+    // exercised against a nontrivial class rather than satisfied by the zero
+    // gauge.  Interface-level cyclicity does NOT imply this: a reversing
+    // interface's constraints are mostly face-interior and lie on no cycle.
+    CHECK( cyc.n_nonbridge > 0 );
+    CHECK( cyc.n_flip_nonbridge > 0 );
+
+    // And that cycle is a genuine edge junction rather than a two-patch face:
+    // its component of G spans at least three patches and three interfaces.
+    CHECK( cyc.max_patches >= 3 );
+    CHECK( cyc.max_sides >= 3 );
 }
