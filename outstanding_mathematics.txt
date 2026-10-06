@@ -245,6 +245,50 @@ M4. THE ORIENTATION PARITY IS A COBOUNDARY, AND THE COMPUTED ONE IS CORRECT
   That is the algebraic reason the existing L-shaped three-patch case passes
   without bearing on this question, and why condition 5 above is mandatory.
 
+  STATUS 2026-10-06, test/RowD_Diagnostics_test.cpp step 5.  Assertions 1, 2
+  and 5 are MEASURED on two fixtures; 3, 4 and 6 need the function-id merge and
+  remain open.
+    FIXTURE A, the four-patch 3d case already in MultiPatchSplineSpace_test.cpp
+    at line 325.  Its topology was measured, not assumed - it is declared by
+    DART PAIRS, so the glued sides cannot be read off the source and had to be
+    recovered from the normalized connections() map.  It is K4: four
+    single-element hexes, each glued to all three others on exactly three of
+    its six faces.  Edge shapes: 12 single-patch, 12 two-patch (beta_1 = 0,
+    trees, NON-discriminating), and 4 three-patch edges with 3 arcs, connected,
+    BETA_1 = 1 - one per patch triple of K4.  So assertion 5 is SATISFIED and
+    the fixture does exercise the parity test.  Assertion 1 holds: 6 declared
+    pairs give 12 entries, so no emplace drop (M9).  Assertion 2 holds in the
+    strong form - the union of arcs over the four cyclic edges is exactly the
+    set of 6 declared pairs, so no declaration goes unexercised.
+    FIXTURE B, a swept three-patch ring, built here to exercise the OTHER
+    producer: three quads fanned around a shared corner, glued i:side0 to
+    i+1:side2 so the ring closes, then passed through
+    connectionsOfSweptMultipatch.  6 connections in, 6 swept, 6 realized - the
+    sweep loses nothing.  Exactly 1 cyclic edge, the swept central vertex: 3
+    patches, 3 arcs, connected, beta_1 = 1.  Assertion 5 SATISFIED.
+    TOPOLOGY-ORBIT ACCOUNTING, both fixtures.  The local-edge total must equal
+    the global total plus the identifications.  A: 4 x 12 = 48 = 28 + 20.  B:
+    3 x 12 = 36 = 25 + 11.  Both exact, and both asserted.  This is NOT an
+    independent merge oracle: cellCount and the orbit walk run on the same
+    combinatorial-map machinery, so it cannot corroborate the function-id
+    merge.  What it does establish is that the observed global edge orbits
+    account for every patch-local edge with no unexpected same-patch
+    multiplicity.
+    PRECONDITION, asserted per fixture.  The incident-patch graph is read off
+    PATCH PAIRS, which is faithful only while at most one declared interface
+    joins any ordered patch pair; with two, distinct faces would collapse into
+    a single arc and the graph would understate beta_1.
+    maxInterfacesPerPatchPair == 1 is asserted on both fixtures, and every
+    cyclic edge additionally asserts that its arcs resolve one-to-one onto
+    declared interfaces.  Step 6 carries ConstituentSide identity explicitly
+    and must not rely on this precondition.
+    NOT YET ASSERTION 6.  Two of fixture A's four cycles traverse a ZeroToOne
+    permutation and fixture B's are all ZeroToZero, but a PERMUTATION IS NOT AN
+    ORIENTATION SIGN: the aligned flag fed to UnionFind is derived from dart
+    geometry through F_b o P o F_a, not from P alone.  Assertion 6 is therefore
+    a step 6 item, measurable without geometry once functionIdMap() is
+    populated.
+
 
 -------------------------------------------------------------------------------
 M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
@@ -546,3 +590,19 @@ REVISION LOG
       toward M4 assertion 4 and M5's tangential block; discharges neither, the
       expected sign being a stated de Rham argument rather than an independent
       oracle.
+  2026-10-06  Step 5 topology measured (test/RowD_Diagnostics_test.cpp):
+    - M4 assertions 1, 2 and 5 MEASURED on two fixtures; see M4 STATUS.  Both
+      fixtures have an edge with beta_1 = 1, so both are discriminating and the
+      tree corollary does not void them.  The four-patch fixture's topology was
+      RECOVERED BY MEASUREMENT rather than read from source, since it is
+      declared by dart pairs.
+    - Assertions 3, 4 and 6 remain open and are step 6 items.  Recorded
+      explicitly that a TPPermutation is not an orientation sign, so the
+      permutations visible at topology level do not discharge assertion 6.
+    - Review corrections, all accepted: the swept fixture's claims are now
+      ASSERTED rather than only reported (exactly one cyclic edge, its arcs
+      equal to the declared pairs, 36 = 25 + 11); the step 5 banner no longer
+      claims assertion 6; the edge-count identity is relabelled
+      topology-orbit accounting and explicitly denied the status of an
+      independent merge oracle; and the patch-pair precondition is now stated
+      and asserted instead of left implicit.

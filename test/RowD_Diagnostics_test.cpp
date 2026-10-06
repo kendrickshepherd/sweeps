@@ -8,6 +8,11 @@
 #include <KnotVector.hpp>
 #include <MultiPatchSplineFactory.hpp>
 #include <TraceMesh.hpp>
+#include <CombinatorialMapMethods.hpp>
+#include <array>
+#include <map>
+#include <optional>
+#include <string>
 #include <VectorConformingMultiPatchSplineSpace.hpp>
 #include <algorithm>
 #include <iostream>
@@ -240,4 +245,356 @@ TEST_CASE( "EXPERIMENT 1: degree dependence of the 2d interface shared count", "
         sweepOne( "reversing     0<->3", makeReversing( degree ), degree,
                   Match::Reversed, Match::Reversed, Match::NegatedReversed );
     }
+}
+
+// ---------------------------------------------------------------------------
+// STEP 5: topology assertions, BEFORE any vector space is constructed.
+// Covers M4's required assertions 1, 2 and 5.  Assertion 6 needs the
+// function-id merge and stays open; it is a step 6 item.  Assertion 5 is
+// load-bearing:
+// by M4's tree corollary, on a graph with beta_1 == 0 every 1-cochain is a
+// coboundary, so a fixture whose edge has a tree-shaped incident-patch graph
+// CANNOT fail the orientation parity test and proves nothing about it.
+// ---------------------------------------------------------------------------
+namespace
+{
+    using DartConnections = std::map<std::pair<size_t, Dart>, std::pair<size_t, Dart>>;
+
+    std::shared_ptr<const MultiPatchCombinatorialMap>
+        buildMultiPatch3d( const size_t n_patches, const DartConnections& conns )
+    {
+        const KnotVector kv( { 0, 0, 0, 1, 1, 1 }, ptol );
+        const auto ss_tp = std::make_shared<const TPSplineSpace>(
+            buildBSpline( { kv, kv, kv }, { 2, 2, 2 } ) );
+        const auto cmap_tp = ss_tp->basisComplexPtr()->parametricAtlasPtr()->cmapPtr();
+        return std::make_shared<const MultiPatchCombinatorialMap>(
+            std::vector<std::shared_ptr<const TPCombinatorialMap>>( n_patches, cmap_tp ), conns );
+    }
+
+    // The fixture from MultiPatchSplineSpace_test.cpp:325, topology only.
+    DartConnections fourPatchConnections()
+    {
+        return { { { 0, Dart( 0 ) }, { 1, Dart( 5 ) } },
+                 { { 0, Dart( 8 ) }, { 2, Dart( 5 ) } },
+                 { { 0, Dart( 16 ) }, { 3, Dart( 23 ) } },
+                 { { 1, Dart( 8 ) }, { 2, Dart( 22 ) } },
+                 { { 1, Dart( 16 ) }, { 3, Dart( 2 ) } },
+                 { { 2, Dart( 16 ) }, { 3, Dart( 8 ) } } };
+    }
+
+    using PatchPair = std::pair<size_t, size_t>;
+
+    // The two ConstituentSides of one declared interface, as plain indices
+    // {p, s, q, t} canonicalised so (p,s) <= (q,t).  Kept because a patch pair
+    // alone cannot name an interface: two distinct faces joining the same two
+    // patches would collapse into a single graph arc.
+    using SideKey = std::array<size_t, 4>;
+
+    SideKey makeSideKey( const ConstituentSide& a, const ConstituentSide& b )
+    {
+        const SideKey x{ a.constituent_id, a.side_id, b.constituent_id, b.side_id };
+        const SideKey y{ b.constituent_id, b.side_id, a.constituent_id, a.side_id };
+        return std::min( x, y );
+    }
+
+    // PRECONDITION for reading an incident-patch graph off patch pairs: at most
+    // one declared interface may join any ordered patch pair.  Asserted per
+    // fixture rather than assumed.  Step 6 carries side identity explicitly and
+    // must not rely on it.
+    size_t maxInterfacesPerPatchPair( const MultiPatchCombinatorialMap& mp )
+    {
+        std::map<PatchPair, size_t> counts;
+        for( const auto& [from, to] : mp.connections() )
+            counts[{ from.constituent_id, to.second.constituent_id }]++;
+        size_t worst = 0;
+        for( const auto& [patch_pair, n] : counts ) worst = std::max( worst, n );
+        return worst;
+    }
+
+    // The declared interface joining two patches, or nullopt if there is not
+    // exactly one.
+    std::optional<SideKey>
+        interfaceBetween( const MultiPatchCombinatorialMap& mp, const size_t p, const size_t q )
+    {
+        std::optional<SideKey> found;
+        for( const auto& [from, to] : mp.connections() )
+        {
+            if( from.constituent_id != p or to.second.constituent_id != q ) continue;
+            if( found.has_value() ) return std::nullopt;
+            found = makeSideKey( from, to.second );
+        }
+        return found;
+    }
+
+    std::set<PatchPair> patchPairsOf( const InternalConnectionsMap& conns )
+    {
+        std::set<PatchPair> out;
+        for( const auto& [from, to] : conns )
+            out.insert( { std::min( from.constituent_id, to.second.constituent_id ),
+                          std::max( from.constituent_id, to.second.constituent_id ) } );
+        return out;
+    }
+
+    struct EdgeObs
+    {
+        size_t n_darts = 0;
+        std::set<size_t> patches;        // incident patches (graph vertices)
+        std::set<PatchPair> transitions; // patch-level arcs this edge traverses
+        std::set<SideKey> side_transitions; // the same arcs, with face identity
+        bool connected = false;
+        size_t beta_1 = 0;
+    };
+
+    // The incident-patch graph of one edge, read off the REALIZED map rather
+    // than off the declared connection list: a vertex per incident patch, an
+    // arc per cross-patch phi_3 transition the edge's own orbit traverses.
+    EdgeObs observeEdge( const MultiPatchCombinatorialMap& mp, const Cell& edge )
+    {
+        EdgeObs o;
+        iterateDartsOfCell( mp, edge, [&]( const Dart& d ) {
+            o.n_darts++;
+            const auto [p, local_d] = mp.toLocalDart( d );
+            o.patches.insert( p );
+            const std::optional<Dart> nb = phi( mp, 3, d );
+            if( nb.has_value() )
+            {
+                const auto [q, local_q] = mp.toLocalDart( nb.value() );
+                if( q != p ) o.transitions.insert( { std::min( p, q ), std::max( p, q ) } );
+            }
+            return true;
+        } );
+
+        // Resolve each patch-level arc to the declared interface it crosses.
+        // side_transitions.size() < transitions.size() means some patch pair
+        // carries more than one interface and the patch-level graph is lossy.
+        for( const PatchPair& t : o.transitions )
+        {
+            const std::optional<SideKey> k = interfaceBetween( mp, t.first, t.second );
+            if( k.has_value() ) o.side_transitions.insert( k.value() );
+        }
+
+        // Connectivity by BFS over the transition arcs.
+        if( not o.patches.empty() )
+        {
+            std::set<size_t> seen{ *o.patches.begin() };
+            std::vector<size_t> stack{ *o.patches.begin() };
+            while( not stack.empty() )
+            {
+                const size_t v = stack.back();
+                stack.pop_back();
+                for( const PatchPair& e : o.transitions )
+                {
+                    const size_t other = ( e.first == v ) ? e.second : ( e.second == v ? e.first : v );
+                    if( other != v and seen.insert( other ).second ) stack.push_back( other );
+                }
+            }
+            o.connected = ( seen.size() == o.patches.size() );
+        }
+        // beta_1 = E - V + C, with C == 1 when connected.
+        if( o.connected and o.transitions.size() + 1 >= o.patches.size() )
+            o.beta_1 = o.transitions.size() + 1 - o.patches.size();
+        return o;
+    }
+
+    // Internal topology-orbit accounting -- NOT an independent merge oracle,
+    // since cellCount and observeEdge both run on the same orbit machinery.
+    // What it does check: the observed global edge orbits account for every
+    // patch-local edge, with no unexpected same-patch multiplicity.
+    std::pair<size_t, size_t> edgeAccounting( const MultiPatchCombinatorialMap& mp )
+    {
+        const size_t n_global = cellCount( mp, 1 );
+        size_t merges = 0;
+        iterateCellsWhile( mp, 1, [&]( const Cell& edge ) {
+            merges += observeEdge( mp, edge ).patches.size() - 1;
+            return true;
+        } );
+        return { n_global, merges };
+    }
+}
+
+TEST_CASE( "STEP 5: four-patch 3d fixture topology", "[rowd]" )
+{
+    const DartConnections declared = fourPatchConnections();
+    const auto mp = buildMultiPatch3d( 4, declared );
+
+    std::cout << "STEP 5: four-patch 3d fixture" << std::endl;
+    std::cout << "  declared face pairs = " << declared.size()
+              << ", connections() entries = " << mp->connections().size() << std::endl;
+    for( const auto& [from, to] : mp->connections() )
+        std::cout << "    " << from << " -> " << to.second << "  " << to.first << std::endl;
+
+    // M4 assertion 1 (M9): each declared pair must install BOTH directions.
+    // initializeInterMapConnections uses emplace, which silently drops a
+    // duplicate key, so a short count means a declaration was lost.
+    CHECK( mp->connections().size() == 2 * declared.size() );
+
+    // Precondition for the patch-level graph below.
+    CHECK( maxInterfacesPerPatchPair( *mp ) == 1 );
+
+    std::map<std::string, size_t> histogram;
+    std::vector<EdgeObs> multi_patch_edges;
+    iterateCellsWhile( *mp, 1, [&]( const Cell& edge ) {
+        const EdgeObs o = observeEdge( *mp, edge );
+        histogram[std::to_string( o.patches.size() ) + " patches, " +
+                  std::to_string( o.transitions.size() ) + " arcs, beta_1=" +
+                  std::to_string( o.beta_1 ) + ( o.connected ? ", connected" : ", DISCONNECTED" )]++;
+        if( o.patches.size() > 1 ) multi_patch_edges.push_back( o );
+        return true;
+    } );
+
+    std::cout << "  edges by incident-patch graph shape:" << std::endl;
+    for( const auto& [shape, count] : histogram )
+        std::cout << "    " << count << " x  " << shape << std::endl;
+
+    std::vector<EdgeObs> cyclic;
+    std::copy_if( multi_patch_edges.begin(), multi_patch_edges.end(), std::back_inserter( cyclic ),
+                  []( const EdgeObs& o ) { return o.beta_1 > 0; } );
+    std::cout << "  multi-patch edges = " << multi_patch_edges.size()
+              << ", of which beta_1 > 0: " << cyclic.size() << std::endl;
+
+    // MEASURED: the topology is K4 -- four single-element patches, each glued
+    // to all three others on exactly three of its six faces.
+    std::map<size_t, size_t> glued_sides_per_patch;
+    for( const auto& [from, to] : mp->connections() ) glued_sides_per_patch[from.constituent_id]++;
+    REQUIRE( glued_sides_per_patch.size() == 4 );
+    for( const auto& [patch, n_glued] : glued_sides_per_patch )
+    {
+        INFO( "patch " << patch );
+        CHECK( n_glued == 3 );
+    }
+
+    // M4 assertion 5, THE LOAD-BEARING ONE: the fixture contains edges whose
+    // incident-patch graph is a cycle, so the orientation parity test is
+    // actually exercised.  Each of the four patch triples of K4 shares exactly
+    // one such edge: 3 patches, 3 arcs, connected, beta_1 == 1.
+    CHECK( cyclic.size() == 4 );
+    std::set<std::set<size_t>> cyclic_triples;
+    std::set<PatchPair> arcs_on_cycles;
+    for( const EdgeObs& o : cyclic )
+    {
+        CHECK( o.patches.size() == 3 );
+        CHECK( o.transitions.size() == 3 );
+        CHECK( o.connected );
+        CHECK( o.beta_1 == 1 );
+        // Face identity is preserved: one declared interface per arc.
+        CHECK( o.side_transitions.size() == o.transitions.size() );
+        cyclic_triples.insert( o.patches );
+        arcs_on_cycles.insert( o.transitions.begin(), o.transitions.end() );
+    }
+    const std::set<std::set<size_t>> expected_triples{ { 0, 1, 2 }, { 0, 1, 3 }, { 0, 2, 3 }, { 1, 2, 3 } };
+    CHECK( cyclic_triples == expected_triples );
+
+    // M4 assertion 2: every declared face adjacency is contained in at least
+    // one of the selected cyclic edges, so no declaration goes unexercised.
+    // In K4 each pair lies on two of the four triples.
+    std::set<PatchPair> declared_pairs;
+    for( const auto& [left, right] : declared )
+        declared_pairs.insert( { std::min( left.first, right.first ), std::max( left.first, right.first ) } );
+    CHECK( declared_pairs.size() == 6 );
+    CHECK( arcs_on_cycles == declared_pairs );
+
+    // Topology-orbit accounting: 4 single-element hexes contribute 12 local
+    // edges each, and the observed orbits must account for all of them.
+    const auto [n_global_edges, merges] = edgeAccounting( *mp );
+    std::cout << "  global edges = " << n_global_edges << ", identifications = " << merges << std::endl;
+    CHECK( n_global_edges == 28 );
+    CHECK( merges == 20 );
+    CHECK( n_global_edges + merges == 4 * 12 );
+}
+
+namespace
+{
+    std::shared_ptr<const MultiPatchCombinatorialMap>
+        buildMultiPatch3dFromSides( const size_t n_patches, const InternalConnectionsMap& conns )
+    {
+        const KnotVector kv( { 0, 0, 0, 1, 1, 1 }, ptol );
+        const auto ss_tp = std::make_shared<const TPSplineSpace>(
+            buildBSpline( { kv, kv, kv }, { 2, 2, 2 } ) );
+        const auto cmap_tp = ss_tp->basisComplexPtr()->parametricAtlasPtr()->cmapPtr();
+        return std::make_shared<const MultiPatchCombinatorialMap>(
+            std::vector<std::shared_ptr<const TPCombinatorialMap>>( n_patches, cmap_tp ), conns );
+    }
+
+    // Three quads fanned around a shared corner: patch i's side 0 (s=0) glues
+    // to patch i+1's side 2 (t=0), and both contain the local (0,0) corner, so
+    // all three corners merge into one valence-three vertex and the ring
+    // closes.  Swept, that vertex becomes a valence-three edge with beta_1 = 1.
+    InternalConnectionsMap threePatchRing2d()
+    {
+        InternalConnectionsMap out;
+        for( size_t i = 0; i < 3; i++ )
+        {
+            const ConstituentSide a{ i, 0 };
+            const ConstituentSide b{ ( i + 1 ) % 3, 2 };
+            out.emplace( a, std::pair<TPPermutation, ConstituentSide>{ TPPermutation::Flip1d, b } );
+            out.emplace( b, std::pair<TPPermutation, ConstituentSide>{ TPPermutation::Flip1d, a } );
+        }
+        return out;
+    }
+
+    void reportEdgeShapes( const MultiPatchCombinatorialMap& mp, std::vector<EdgeObs>& cyclic_out )
+    {
+        std::map<std::string, size_t> histogram;
+        iterateCellsWhile( mp, 1, [&]( const Cell& edge ) {
+            const EdgeObs o = observeEdge( mp, edge );
+            histogram[std::to_string( o.patches.size() ) + " patches, " +
+                      std::to_string( o.transitions.size() ) + " arcs, beta_1=" +
+                      std::to_string( o.beta_1 ) + ( o.connected ? ", connected" : ", DISCONNECTED" )]++;
+            if( o.beta_1 > 0 ) cyclic_out.push_back( o );
+            return true;
+        } );
+        std::cout << "  edges by incident-patch graph shape:" << std::endl;
+        for( const auto& [shape, count] : histogram )
+            std::cout << "    " << count << " x  " << shape << std::endl;
+    }
+}
+
+TEST_CASE( "STEP 5: swept three-patch 3d fixture topology", "[rowd]" )
+{
+    const InternalConnectionsMap conns_2d = threePatchRing2d();
+    const InternalConnectionsMap conns_3d = connectionsOfSweptMultipatch( conns_2d );
+    const auto mp = buildMultiPatch3dFromSides( 3, conns_3d );
+
+    std::cout << "STEP 5: swept three-patch ring" << std::endl;
+    std::cout << "  2d connections = " << conns_2d.size()
+              << ", swept 3d connections = " << conns_3d.size()
+              << ", realized = " << mp->connections().size() << std::endl;
+    for( const auto& [from, to] : mp->connections() )
+        std::cout << "    " << from << " -> " << to.second << "  " << to.first << std::endl;
+
+    // M4 assertion 1 for the swept producer: three declared 2d gluings, both
+    // directions each, carried through the sweep without loss.
+    CHECK( conns_2d.size() == 6 );
+    CHECK( conns_3d.size() == 6 );
+    CHECK( mp->connections().size() == 6 );
+
+    std::vector<EdgeObs> cyclic;
+    reportEdgeShapes( *mp, cyclic );
+    std::cout << "  cyclic edges = " << cyclic.size() << std::endl;
+
+    // Precondition for the patch-level graph.
+    CHECK( maxInterfacesPerPatchPair( *mp ) == 1 );
+
+    // M4 assertion 5 for this fixture: the swept central vertex is the one
+    // valence-three edge, and its incident-patch graph is a 3-cycle.
+    REQUIRE( cyclic.size() == 1 );
+    const EdgeObs& central = cyclic.front();
+    CHECK( central.patches.size() == 3 );
+    CHECK( central.transitions.size() == 3 );
+    CHECK( central.side_transitions.size() == 3 );
+    CHECK( central.connected );
+    CHECK( central.beta_1 == 1 );
+    CHECK( central.patches == std::set<size_t>{ 0, 1, 2 } );
+
+    // M4 assertion 2: every declared face pair occurs on that cyclic edge.
+    const std::set<PatchPair> declared_pairs = patchPairsOf( conns_3d );
+    CHECK( declared_pairs.size() == 3 );
+    CHECK( central.transitions == declared_pairs );
+
+    // Topology-orbit accounting: 3 single-element hexes, 12 local edges each.
+    const auto [n_global_edges, merges] = edgeAccounting( *mp );
+    std::cout << "  global edges = " << n_global_edges << ", identifications = " << merges << std::endl;
+    CHECK( n_global_edges == 25 );
+    CHECK( merges == 11 );
+    CHECK( n_global_edges + merges == 3 * 12 );
 }
