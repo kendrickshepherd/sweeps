@@ -391,22 +391,88 @@ M9. PROOF HYGIENE: DUPLICATE SIDE DECLARATIONS ARE SILENTLY DROPPED
 -------------------------------------------------------------------------------
 M10. THE PER-ELEMENT SHARED COUNT OF 2
 -------------------------------------------------------------------------------
-  CLASS     ASSERTED as a conjecture; currently pinned TEMPORARY in
-            test/Phase0_Characterization_test.cpp:282.
+  CLASS     MEASURED 2026-10-05.  The conjecture below was committed at 8d1e4ce
+            BEFORE the sweep ran; the measurement confirms it.
   CLAIM     The H(div)/H(curl) per-paired-element shared count of 2 in 2D is the
             correct degree-dependent trace count, not a symptom of a defect.
-  CONJECTURE  For a degree-p 2D de Rham pair the interface-tangential component
-            carries degree p-1, giving p functions per element; so the count
-            should track 2 -> 3 -> 4 for p = 2, 3, 4.
-  NOT PROVED  The degree relation has not been measured, and the component
-            convention of this codebase has not been confirmed against it.  Do
-            not promote the TEMPORARY labels on the strength of the arithmetic
-            above; measure first, and measure on BOTH a reversing and a
-            non-reversing side pair so the count is not accidentally tied to one
-            orientation class - side-blindness was the entire Stage 2 defect
-            class, and measuring one class only would repeat that error.
-  ENOUGH WOULD BE  The degree sweep, plus a dimension count of the interface
-            trace space to confirm the relation rather than curve-fit it.
+  CONJECTURE (as written before measuring)  For a degree-p 2D de Rham pair the
+            interface-tangential component carries degree p-1, giving p
+            functions per element; so the count should track 2 -> 3 -> 4 for
+            p = 2, 3, 4.
+  RESULT    EXPERIMENT 1, test/RowD_Diagnostics_test.cpp, degrees 2/3/4 on both
+            orientation classes - sides 0<->1 (non-reversing) and sides 0<->3
+            (reversing), two interface elements each:
+
+              space    trace fns/elem     shared/elem
+              H1       p+1                p+1
+              H(div)   2p+1               p
+              H(curl)  2p+1               p
+
+            shared = p exactly: 2, 3, 4 for p = 2, 3, 4, IDENTICAL on both
+            orientation classes.  The conjecture is confirmed, and the count is
+            not tied to one class.  The 2p+1 trace total decomposes as
+            p + (p+1): the conforming component carries degree p-1 (p functions
+            per element, all shared) and the other carries degree p (p+1
+            functions, correctly NOT shared).  So the relation is a dimension
+            count, not a curve fit through three points.  The p=2
+            non-reversing row reproduces the committed Phase 0 numbers exactly
+            (rows 5, cols 5, shared 2, identity column match 2), so the new
+            harness agrees with the old one where they overlap.
+  WHAT THIS CLOSES  shared == 2 is no longer evidence of a defect, which
+            retires it as row D's live marker (outstanding_issues.txt criterion
+            8).  Row D then has NO live marker in the Phase 0 suite.
+  WHAT THIS DOES NOT CLOSE  Everything row D is actually about.  This is a
+            codimension-ONE face interface in 2D.  It says nothing about 3D
+            codimension-TWO edge classes, which remain the open question and
+            still need the M4 fixture assertions.  Promoting the TEMPORARY label
+            is justified by this measurement alone, but closing row D is not.
+
+  SIDE RESULT, UNPLANNED - THE ORIENTATION BOOL IS MEASURABLY ACTIVE, AND ITS
+  OBSERVED SIGN IS CONSISTENT WITH THE EXPECTED DE RHAM ORIENTATION.
+            For every degree and every interface element, every shared
+            extraction row agrees under the expected ordering and sign, and
+            under that same ordering the opposite-sign comparison matches
+            nothing:
+
+              space    non-reversing 0<->1   reversing 0<->3
+              H1       +identity             +reversed
+              H(div)   +identity             +reversed
+              H(curl)  +identity             -reversed   <-- negated
+
+            H(curl) across a reversing interface agrees after BOTH reversing
+            the column order AND negating, to 1e-10, with nothing matching in
+            the non-negated reversed channel.  That is consistent with the
+            expected de Rham orientation: the conforming component of H(curl)
+            in 2D is the tangential one, the induced tangent directions of the
+            two patches are antiparallel across a reversing pair, so the two
+            orientation bools must differ for the global function to be
+            single-valued - and the minus must appear exactly once, which
+            ra + rb.reverse() == 0 confirms.  H(div)'s conforming component is
+            the normal and needs no flip.
+  WHAT IS NOT CLAIMED  That only one of the four comparisons ever matches.
+            Incidental partial agreement under a DIFFERENT ordering does occur
+            and is expected: a symmetric scalar basis function is its own
+            mirror, so non-reversing H1 shows 1 reversed match and reversing H1
+            shows 1 identity match at p = 2 and p = 4, and 0 at p = 3 where
+            p+1 is even and there is no central function.  The test therefore
+            asserts that the expected channel matches every shared row and its
+            opposite-sign counterpart matches none; it deliberately does NOT
+            assert that the other two comparisons vanish.  For H(div) and
+            H(curl) they do happen to vanish throughout this sweep, but that
+            stronger property is neither pinned by the test nor required for
+            correctness.
+  WHY IT MATTERS  This is the first MEASURED evidence that the orientation bool
+            in functionIdMap is ACTIVE - it demonstrably changes the extraction
+            rows - and that its observed sign is consistent with the expected
+            de Rham orientation.  The discriminating part is the opposite-sign
+            zero: a defect of the Stage 2 class produced partial and mixed
+            agreement in the EXPECTED channel (see the 3D table, now step e's
+            marker), whereas here the expected channel is complete and its sign
+            counterpart empty.
+  STILL NOT PROVED  The expected sign above is a de Rham argument stated here,
+            not an independently coded oracle, and it is 2D only.  It is
+            evidence for M4 assertion 4 and for M5's tangential block in 2D; it
+            does not discharge either, and it says nothing about 3D.
 
 
 -------------------------------------------------------------------------------
@@ -466,3 +532,17 @@ REVISION LOG
       transitivity argument sharpened to require face gluings CONTAINING the
       edge.
     - M6: marked explicitly NOT A GATE, retained as a methodological note.
+  2026-10-05  EXPERIMENT 1 measured (test/RowD_Diagnostics_test.cpp):
+    - M10: CONFIRMED.  shared = p exactly, on both orientation classes.  The
+      conjecture was committed before the sweep, so the provenance holds.
+      Retires shared == 2 as row D's marker; does NOT close row D, which is a
+      codimension-two 3D question this 2D measurement cannot reach.
+    - M10 side result: the orientation bool is measurably ACTIVE in 2D and its
+      observed sign is consistent with the expected de Rham orientation -
+      H(curl) agrees across a reversing interface under reversal AND negation,
+      with nothing matching in the non-negated reversed channel.  Incidental
+      partial agreement under a different ordering does occur for symmetric
+      scalar basis functions and is deliberately not asserted away.  Evidence
+      toward M4 assertion 4 and M5's tangential block; discharges neither, the
+      expected sign being a stated de Rham argument rather than an independent
+      oracle.

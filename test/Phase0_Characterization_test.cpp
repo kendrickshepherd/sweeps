@@ -279,10 +279,9 @@ TEST_CASE( "EXPERIMENT B: elementwise cross-patch correspondence, 2d Flip1d", "[
         CHECK( o.reversed_col_match == 1 );
     }
 
-    // TEMPORARY (row D): with correct pairing the vector spaces share 2 of 5
-    // per paired element rather than 0.  2 is NOT yet the right answer -- the
-    // lower-dimensional H(curl)/H(div) merge is a separate open blocker -- so
-    // these pin current behaviour and retire with row D.
+    // PERMANENT (M10): the degree sweep establishes shared == p for H(div) and
+    // H(curl) on both interface-orientation classes; this fixture has p = 2.
+    // See test/RowD_Diagnostics_test.cpp.
     for( const PairObs& o : observeInterfaces( buildHDivMultiPatchSplineSpace( h1 ) ) )
     {
         CHECK( o.a_rows == 5 );

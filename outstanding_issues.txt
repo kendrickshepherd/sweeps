@@ -288,8 +288,11 @@ TEST-LABEL CORRECTIONS REQUIRED IN test/Phase0_Characterization_test.cpp
     - B's h1 rows moved shared 1 -> 3 and identity_col_match 0 -> 3, with
       reversed_col_match 1, which counts only the self-mirrored middle function
       and is a fixture artifact rather than an invariant.
-    - B's H(div)/H(curl) per-element shared moved 0 -> 2.  2 is NOT the final
-      answer; those rows stay TEMPORARY and retire with row D.
+    - B's H(div)/H(curl) per-element shared moved 0 -> 2.  PROMOTED TO
+      PERMANENT 2026-10-05: the degree sweep in RowD_Diagnostics_test.cpp
+      measured shared == p for p = 2, 3, 4 on both interface-orientation
+      classes, so 2 IS the final answer at p = 2.  See
+      outstanding_mathematics.txt M10.
     - The 3D column-match table was MEASURED UNCHANGED.  An earlier Stage 2
       prediction that it would shift was WRONG: column order comes from the
       extraction operator, not from element pairing, and a 1x1 side pairs
@@ -670,9 +673,13 @@ STAGE 2 IS COMPLETE ONLY WHEN
   8. the H(curl) lower-dimensional merge question (row D) remains explicitly
      tracked as a SEPARATE BLOCKER before anyone claims complete 3D multipatch
      H(curl) support.  Stage 2 does not close it and must not imply it does.
-     [STILL OPEN BY DESIGN.  Its live marker is B's H(div)/H(curl)
-     shared == 2 rows.  The 3D column-match table was REASSIGNED to step e on
-     2026-10-05 and is no longer a row D marker.]
+     [STILL OPEN BY DESIGN.  The former Phase 0 marker is RESOLVED: B's
+     H(div)/H(curl) shared == 2 rows were promoted to PERMANENT on 2026-10-05
+     when the degree sweep measured shared == p on both interface-orientation
+     classes.  Row D remains open pending the dedicated 3D edge-class and
+     orientation diagnostics; ABSENCE OF A PHASE 0 MARKER IS NOT EVIDENCE OF
+     CLOSURE.  The 3D column-match table was REASSIGNED to step e on 2026-10-05
+     and must remain assigned to step e, not row D.]
 
   FRAMING: with 1-7 satisfied, STAGE 2'S SIDE-AWARE INTERFACE-CONSUMER REPAIR
   IS COMPLETE.  That is the claim, and it is deliberately scoped: it does NOT
