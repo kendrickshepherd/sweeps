@@ -19,6 +19,10 @@
 #include <iostream>
 #include <set>
 #include <vector>
+#include <MultiPatchParametricAtlas.hpp>
+#include <ParametricAtlas1d.hpp>
+#include <CombinatorialMap1d.hpp>
+#include <ParametricAtlas.hpp>
 #include <SideCoordinateTransform.hpp>
 #include <IndexOperations.hpp>
 #include <UnionFind.hpp>
@@ -1476,4 +1480,261 @@ TEST_CASE( "STEP 6: H(curl) face constraints on the reversing three-patch ring",
     // its component of G spans at least three patches and three interfaces.
     CHECK( cyc.max_patches >= 3 );
     CHECK( cyc.max_sides >= 3 );
+}
+
+namespace
+{
+    // STEP 8 (M5).  coordinateTransform in ParametricAtlas.cpp and
+    // sideCoordinateTransform express the same gluing in two different
+    // vocabularies, and M5 is open because only the second has been derived.
+    // Reconciling them by fitting would prove nothing, so the expectation
+    // below is derived from sideCoordinateTransform plus the geometry of
+    // getFrame, and coordinateTransform's own formula is not consulted.
+    //
+    // THE TWO VOCABULARIES.  sideCoordinateTransform is a signed permutation
+    // of TANGENTIAL axes indexed by DESTINATION tangential axis.
+    // coordinateTransform is indexed by SOURCE PARENT axis and holds
+    // (destination parent axis, aligned) for all dim axes, normal included.
+    //
+    // THE TANGENTIAL BLOCK.  getFrame is called with reverse_dart = true on
+    // the far side, which swaps ppt00 and ppt10, so the two frames take the
+    // same two physical points as origin and first corner.  Their tangential
+    // frame directions are therefore the same physical directions, and the
+    // index correspondence reverses exactly when the two patches' parent-axis
+    // senses disagree: aligned = not source_axis_reversed[d].
+    //
+    // THE NORMAL BLOCK, which is where the unexplained factor term lived.  In
+    // 3d getFrame reaches its fourth corner by phi {2,1,1}, which lands OFF
+    // the face and INWARD into the patch, so each frame's third direction
+    // points inward and the two point physically OPPOSITE ways.  Inward is
+    // +e_n exactly on the LOWER side of an axis, and the side ordering is
+    // S1,S0,T1,T0,U1,U0, so lower means an ODD side id.  A transition map
+    // sends outward-a to inward-b, giving normal sign -sigma_a*sigma_b:
+    // aligned iff the two side ids have DIFFERENT parity.  That extra flip is
+    // exactly what factor = ( coord != dim - 1 ) supplies.
+    std::map<size_t, std::pair<size_t, bool>>
+        expectedCoordinateTransform( const size_t side_a, const size_t side_b, const SideCoordinateTransform& t )
+    {
+        const std::vector<size_t> src_axes = tangentialAxes( 3, side_a );
+        const std::vector<size_t> dst_axes = tangentialAxes( 3, side_b );
+        std::map<size_t, std::pair<size_t, bool>> expected;
+        for( size_t d = 0; d < dst_axes.size(); d++ )
+            expected[src_axes.at( t.source_axis_for_destination.at( d ) )] = {
+                dst_axes.at( d ), not t.source_axis_reversed.at( d ) };
+        expected[side_a / 2] = { side_b / 2, ( side_a % 2 ) != ( side_b % 2 ) };
+        return expected;
+    }
+
+    // Every (source side, destination side, permutation) class realisable
+    // between two 3d patches, with one representative dart pair each.  A
+    // 1-element hex has all 24 of its darts on the boundary, 4 per side, and
+    // the dart-pair constructor DERIVES the permutation, so sweeping 24x24
+    // enumerates the classes rather than assuming which are reachable.
+    using GluingClass = std::tuple<size_t, size_t, size_t>;
+
+    std::map<GluingClass, DartConnections> gluingClasses3d( size_t& n_built, size_t& n_rejected )
+    {
+        std::map<GluingClass, DartConnections> out;
+        n_built = 0;
+        n_rejected = 0;
+        for( Dart::IndexType da = 0; da < 24; da++ )
+        {
+            for( Dart::IndexType db = 0; db < 24; db++ )
+            {
+                const DartConnections conns{ { { 0, Dart( da ) }, { 1, Dart( db ) } } };
+                std::shared_ptr<const MultiPatchCombinatorialMap> mp;
+                try
+                {
+                    mp = buildMultiPatch3d( 2, conns );
+                }
+                catch( const std::exception& )
+                {
+                    n_rejected++;
+                    continue;
+                }
+                n_built++;
+                for( const auto& [from, to] : mp->connections() )
+                {
+                    if( from.constituent_id != 0 ) continue;
+                    out.insert( { { from.side_id, to.second.side_id, static_cast<size_t>( to.first ) }, conns } );
+                }
+            }
+        }
+        return out;
+    }
+}
+
+TEST_CASE( "STEP 8: coordinateTransform against sideCoordinateTransform, all 3d gluing classes", "[rowd]" )
+{
+    const KnotVector kv( { 0, 0, 0, 1, 1, 1 }, ptol );
+    const auto cmap_1d = std::make_shared<const CombinatorialMap1d>( numElements( kv ) );
+    const auto param_1d = std::make_shared<const param::ParametricAtlas1d>( cmap_1d, parametricLengths( kv ) );
+    const auto cmap_2d = std::make_shared<const TPCombinatorialMap>( cmap_1d, cmap_1d );
+    const auto param_2d = std::make_shared<const param::TPParametricAtlas>( cmap_2d, param_1d, param_1d );
+    const auto cmap_3d = std::make_shared<const TPCombinatorialMap>( cmap_2d, cmap_1d );
+    const auto param_3d = std::make_shared<const param::TPParametricAtlas>( cmap_3d, param_2d, param_1d );
+
+    size_t n_built = 0, n_rejected = 0;
+    const auto classes = gluingClasses3d( n_built, n_rejected );
+    std::cout << "STEP 8: dart pairs built " << n_built << ", rejected " << n_rejected
+              << ", distinct gluing classes " << classes.size() << std::endl;
+
+    // 6 sides x 6 sides x 4 permutations, every one of them reachable from a
+    // dart pair.  Asserted after measuring, so the exhaustiveness M5 asks for
+    // is a measured fact about this enumeration and not an assumption in it.
+    CHECK( n_built == 576 );
+    CHECK( n_rejected == 0 );
+    CHECK( classes.size() == 144 );
+
+    size_t n_dart_disagreements = 0, n_bad_dart_counts = 0, n_orientation_reversing = 0;
+    for( const auto& [cls, conns] : classes )
+    {
+        const auto [side_a, side_b, perm_i] = cls;
+        const auto mp = buildMultiPatch3d( 2, conns );
+        const param::MultiPatchParametricAtlas atlas(
+            mp, std::vector<std::shared_ptr<const param::TPParametricAtlas>>{ param_3d, param_3d } );
+
+        const SideCoordinateTransform t = sideCoordinateTransform(
+            3, side_a, side_b, static_cast<TPPermutation>( perm_i ) );
+        const auto expected = expectedCoordinateTransform( side_a, side_b, t );
+
+        // THE NORMAL ENTRY HAS TWO DERIVATIONS OF INDEPENDENT PROVENANCE:
+        // step 7's phi-free contravariant sign sgn(sigma)*s_t1*s_t2, and the
+        // parity formula above, s_n, from getFrame's inward corner.  Both are
+        // compared against production, which reads this entry's aligned flag
+        // straight into uf.unite for H(div) (VectorConformingMultiPatch-
+        // SplineSpace.cpp:104,143).  Since det J = sgn(sigma) * prod_i s_i,
+        // their agreement is ALGEBRAICALLY EQUIVALENT to det J = +1, so the
+        // check below is an INTERPRETATION of an agreement already measured,
+        // not a third confirmation of it.  What it says is that gluing two
+        // parent cubes along a face is orientation PRESERVING on every
+        // reachable class, verified here by enumeration.  Proving that without
+        // enumeration needs an orientation argument for the dart-pair
+        // constructor, which is not yet recorded; see M5 STEP 8.
+        bool det_positive = axisPermutationEven( side_a, side_b, t );
+        if( not expected.at( side_a / 2 ).second ) det_positive = not det_positive;
+        for( size_t d = 0; d < t.source_axis_reversed.size(); d++ )
+            if( t.source_axis_reversed.at( d ) ) det_positive = not det_positive;
+        if( not det_positive ) n_orientation_reversing++;
+
+        // A face cell has four darts.  The transform is a signed permutation
+        // of parent axes, a representative-independent object, so all four
+        // must agree; this also pins that no entry is left unwritten, the
+        // failure mode a face-diagonal fourth corner would have produced.
+        std::optional<SmallVector<std::pair<size_t, bool>, 3>> got;
+        size_t n_darts = 0;
+        for( Dart::IndexType local_d = 0; local_d < 24; local_d++ )
+        {
+            const Dart gd = mp->toGlobalDart( 0, Dart( local_d ) );
+            if( not phi( *mp, 3, gd ).has_value() ) continue;
+            n_darts++;
+            const auto one = param::coordinateTransform( atlas, Face( gd ) );
+            if( not got.has_value() ) got = one;
+            else if( not( one == got.value() ) ) n_dart_disagreements++;
+        }
+        if( n_darts != 4 ) n_bad_dart_counts++;
+
+        REQUIRE( got.has_value() );
+        REQUIRE( got.value().size() == 3 );
+        CHECK( std::set<size_t>{ got.value().at( 0 ).first,
+                                 got.value().at( 1 ).first,
+                                 got.value().at( 2 ).first }.size() == 3 );
+        for( const auto& [src_axis, exp] : expected )
+        {
+            CHECK( got.value().at( src_axis ).first == exp.first );
+            CHECK( got.value().at( src_axis ).second == exp.second );
+        }
+    }
+    CHECK( n_dart_disagreements == 0 );
+    CHECK( n_bad_dart_counts == 0 );
+    std::cout << "  orientation-reversing classes: " << n_orientation_reversing << " of "
+              << classes.size() << std::endl;
+    CHECK( n_orientation_reversing == 0 );
+}
+
+// Coverage extension for steps 6 and 7 (M5 item i).  Those steps measured the
+// covariant and contravariant sign rules only on the classes fixtures A-D
+// happen to realise; this runs both over all 144.
+//
+// WHAT A TWO-PATCH SWEEP CAN AND CANNOT TEST.  Its constraint graph is a tree,
+// so beta_1 = 0 and nothing here tests cycle consistency; that stays the
+// contribution of the reversing fixtures C and D.  The per-constraint sign
+// check is still discriminating, because the only gauge freedom is flipping a
+// whole equivalence class, which flips both of a constraint's orientations
+// together and so leaves the RELATIVE orientation it compares invariant.
+TEST_CASE( "STEP 8: the step 6 and 7 interface sign rules over all 3d gluing classes", "[rowd]" )
+{
+    size_t n_built = 0, n_rejected = 0;
+    const auto classes = gluingClasses3d( n_built, n_rejected );
+    REQUIRE( classes.size() == 144 );
+
+    struct Agg
+    {
+        size_t n_spaces = 0;
+        size_t n_constraints = 0;
+        size_t n_misaligned = 0;
+        size_t n_classes_flipping = 0;
+    };
+    std::map<ConformingType, Agg> agg;
+    size_t n_disagree = 0; // classes where the two rules differ on whether anything flips
+
+    for( const auto& [cls, conns] : classes )
+    {
+        const auto mp = buildMultiPatch3d( 2, conns );
+        const MultiPatchSplineSpace primal = buildPrimalFromDarts( 2, conns );
+        std::map<ConformingType, bool> flips;
+        for( const ConformingType ct : { ConformingType::Curl, ConformingType::Divergence } )
+        {
+            const VectorConformingMultiPatchSplineSpace space =
+                ct == ConformingType::Curl ? buildHCurlMultiPatchSplineSpace( primal )
+                                           : buildHDivMultiPatchSplineSpace( primal );
+            const std::vector<ComponentLengths> lengths = lengthsOf( space );
+            std::vector<Constraint> constraints;
+            for( const auto& [a, perm, b] : declaredInterfaces( *mp ) )
+            {
+                const auto one = interfaceConstraints( a, perm, b, lengths, ct );
+                constraints.insert( constraints.end(), one.begin(), one.end() );
+            }
+            const MergeObs o = compareMerge( space, lengths, constraints );
+            CHECK( o.id_mismatch == 0 );
+            CHECK( o.n_global == o.n_global_expected );
+            CHECK( o.sign_mismatch == 0 );
+
+            Agg& g = agg[ct];
+            g.n_spaces++;
+            g.n_constraints += o.n_constraints;
+            g.n_misaligned += o.n_misaligned;
+            if( o.n_misaligned > 0 ) g.n_classes_flipping++;
+            flips[ct] = o.n_misaligned > 0;
+        }
+        if( flips.at( ConformingType::Curl ) != flips.at( ConformingType::Divergence ) ) n_disagree++;
+    }
+
+    for( const auto& [ct, g] : agg )
+        std::cout << "  " << ( ct == ConformingType::Curl ? "H(curl)" : "H(div) " ) << ": spaces "
+                  << g.n_spaces << ", constraints " << g.n_constraints << " of which " << g.n_misaligned
+                  << " sign-flipping, in " << g.n_classes_flipping << " of 144 classes" << std::endl;
+    std::cout << "  classes where the covariant and contravariant rules disagree about flipping: "
+              << n_disagree << std::endl;
+
+    // MEASURED REGRESSION INVARIANTS, not derived quantities.  They guard the
+    // rules' discriminating power: a rule that degenerated to all-aligned
+    // would still satisfy the mismatch checks above on any fixture whose
+    // production merge also stopped flipping.  That exactly half of each
+    // type's constraints flip, and that H(curl) flips somewhere in 108 of the
+    // 144 classes against H(div)'s 72, are observations about this class set;
+    // no equidistribution argument is recorded for either.
+    CHECK( agg.at( ConformingType::Curl ).n_constraints == 1728 );
+    CHECK( agg.at( ConformingType::Curl ).n_misaligned == 864 );
+    CHECK( agg.at( ConformingType::Curl ).n_classes_flipping == 108 );
+    CHECK( agg.at( ConformingType::Divergence ).n_constraints == 576 );
+    CHECK( agg.at( ConformingType::Divergence ).n_misaligned == 288 );
+    CHECK( agg.at( ConformingType::Divergence ).n_classes_flipping == 72 );
+
+    // Step 7 demonstrated the two rules' independence on two fixtures: A flips
+    // nowhere in H(curl) but twelve times in H(div), D the other way.  Over
+    // the full class set they disagree about whether anything flips on half of
+    // it, so the permutation parity in the contravariant rule carries
+    // information no covariant rule supplies anywhere but at a few points.
+    CHECK( n_disagree == 72 );
 }
