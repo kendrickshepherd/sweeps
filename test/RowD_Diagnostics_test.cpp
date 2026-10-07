@@ -789,6 +789,26 @@ namespace
         return out;
     }
 
+    // Parity of the 3d axis permutation a gluing induces: normal axes
+    // correspond, tangential axes follow the side transform.  True when even.
+    bool axisPermutationEven( const size_t side_a,
+                              const size_t side_b,
+                              const SideCoordinateTransform& t )
+    {
+        const std::vector<size_t> src_axes = tangentialAxes( 3, side_a );
+        const std::vector<size_t> dst_axes = tangentialAxes( 3, side_b );
+        std::array<size_t, 3> sigma{};
+        sigma.at( side_a / 2 ) = side_b / 2;
+        for( size_t d = 0; d < dst_axes.size(); d++ )
+            sigma.at( src_axes.at( t.source_axis_for_destination.at( d ) ) ) = dst_axes.at( d );
+
+        size_t inversions = 0;
+        for( size_t i = 0; i < 3; i++ )
+            for( size_t j = i + 1; j < 3; j++ )
+                if( sigma.at( i ) > sigma.at( j ) ) inversions++;
+        return inversions % 2 == 0;
+    }
+
     // The intended constraints across one declared interface.  conforming_comps
     // names, per destination tangential position d, the pair of components that
     // must merge.  For H(curl) those are the two tangential components, paired
@@ -824,11 +844,17 @@ namespace
         }
         else
         {
-            // Face-normal control only.  The contravariant sign depends on the
-            // whole face map rather than one axis, so no sign is predicted here
-            // and the caller does not assert one.
+            // De Rham normal rule: the one conforming component on a face is
+            // the normal one.  Piola gives v_b^sigma(i) = s_i v_a^i / det J
+            // with det J = sgn(sigma) * prod_i s_i, so at i = normal the sign
+            // is sgn(sigma) times the TANGENTIAL reversals -- the normal flip
+            // cancels.  Derived in M4; unlike H(curl) above, one component's
+            // sign couples both tangential flips and the permutation parity.
+            bool flip = not axisPermutationEven( a.side_id, b.side_id, t );
+            for( size_t d = 0; d < t.source_axis_reversed.size(); d++ )
+                if( t.source_axis_reversed.at( d ) ) flip = not flip;
             comp_pairs.push_back( { a.side_id / 2, b.side_id / 2 } );
-            comp_aligned.push_back( true );
+            comp_aligned.push_back( not flip );
         }
 
         std::vector<Constraint> out;
@@ -892,8 +918,7 @@ namespace
     // constraint set, which is derived independently.
     MergeObs compareMerge( const VectorConformingMultiPatchSplineSpace& space,
                            const std::vector<ComponentLengths>& patch_lengths,
-                           const std::vector<Constraint>& constraints,
-                           const bool assert_signs )
+                           const std::vector<Constraint>& constraints )
     {
         MergeObs o;
         const std::vector<size_t> offsets = patchOffsets( patch_lengths );
@@ -910,7 +935,7 @@ namespace
             const auto& [gid_a, or_a] = fid_map.at( c.patch_a ).at( c.local_a );
             const auto& [gid_b, or_b] = fid_map.at( c.patch_b ).at( c.local_b );
             CHECK( gid_a == gid_b );
-            if( assert_signs ) CHECK( ( or_a == or_b ) == c.aligned );
+            CHECK( ( or_a == or_b ) == c.aligned );
         }
 
         util::UnionFind uf( o.n_local );
@@ -1148,18 +1173,14 @@ namespace
             constraints.insert( constraints.end(), one.begin(), one.end() );
         }
 
-        // The sign expectation is derived only for H(curl); H(div) is an id and
-        // partition control.
-        const bool assert_signs = conforming_type == ConformingType::Curl;
-        const MergeObs o = compareMerge( space, patch_lengths, constraints, assert_signs );
+        // Both conforming types now carry an independently derived sign: the
+        // covariant tangential rule for H(curl), the contravariant normal rule
+        // for H(div).  Neither reads coordinateTransform or functionIdMap.
+        const MergeObs o = compareMerge( space, patch_lengths, constraints );
         reportMerge( label, o );
         CHECK( o.id_mismatch == 0 );
         CHECK( o.n_global == o.n_global_expected );
-        // Only H(curl) has an independently derived sign here.  H(div)'s
-        // contravariant sign is not predicted, so its relative signs are
-        // reported and NOT asserted; the observed nonzero count is recorded in
-        // the ledger, not pinned.
-        if( assert_signs ) CHECK( o.sign_mismatch == 0 );
+        CHECK( o.sign_mismatch == 0 );
         return o;
     }
 }
@@ -1183,7 +1204,14 @@ TEST_CASE( "STEP 6: H(curl) face constraints on the four-patch 3d fixture", "[ro
     }
 
     const MergeObs curl = runStep6( "H(curl)", primal, *mp, ConformingType::Curl );
-    runStep6( "H(div) control", primal, *mp, ConformingType::Divergence );
+    const MergeObs div = runStep6( "H(div) control", primal, *mp, ConformingType::Divergence );
+
+    // STEP 7.  The contravariant face sign is now predicted, not just reported:
+    // 12 of this fixture's 24 normal-component constraints are expected to
+    // flip.  H(curl) flips nowhere here, so these come entirely from the
+    // permutation parity -- the two rules are independent.
+    CHECK( div.n_constraints == 24 );
+    CHECK( div.n_misaligned == 12 );
 
     const CycleObs cyc = curlCycles( primal, *mp );
     reportCycles( cyc );
@@ -1213,7 +1241,11 @@ TEST_CASE( "STEP 6: H(curl) face constraints on the swept three-patch 3d fixture
     std::cout << "STEP 6: swept three-patch 3d fixture" << std::endl;
 
     const MergeObs curl = runStep6( "H(curl)", primal, *mp, ConformingType::Curl );
-    runStep6( "H(div) control", primal, *mp, ConformingType::Divergence );
+    const MergeObs div = runStep6( "H(div) control", primal, *mp, ConformingType::Divergence );
+
+    // STEP 7: all 12 normal-component constraints are expected to flip here.
+    CHECK( div.n_constraints == 12 );
+    CHECK( div.n_misaligned == 12 );
 
     const CycleObs cyc = curlCycles( primal, *mp );
     reportCycles( cyc );
@@ -1378,7 +1410,13 @@ TEST_CASE( "STEP 6: H(curl) face constraints on the reversing four-patch 3d fixt
     CHECK( mp->connections().size() == 2 * declared.size() );
 
     const MergeObs curl = runStep6( "H(curl)", primal, *mp, ConformingType::Curl );
-    runStep6( "H(div) control", primal, *mp, ConformingType::Divergence );
+    const MergeObs div = runStep6( "H(div) control", primal, *mp, ConformingType::Divergence );
+
+    // STEP 7: 16 of 24, up from fixture A's 12, because this fixture's extra
+    // tangential reversal flips the normal component on the re-glued interface
+    // as well.
+    CHECK( div.n_constraints == 24 );
+    CHECK( div.n_misaligned == 16 );
 
     const CycleObs cyc = curlCycles( primal, *mp );
     reportCycles( cyc );
@@ -1411,7 +1449,13 @@ TEST_CASE( "STEP 6: H(curl) face constraints on the reversing three-patch ring",
     CHECK( mp->connections().size() == 2 * declared.size() );
 
     const MergeObs curl = runStep6( "H(curl)", primal, *mp, ConformingType::Curl );
-    runStep6( "H(div) control", primal, *mp, ConformingType::Divergence );
+    const MergeObs div = runStep6( "H(div) control", primal, *mp, ConformingType::Divergence );
+
+    // STEP 7: 4 of 12.  Contrast H(curl)'s 24 of 36 flips on this same fixture:
+    // the two rules disagree about which interfaces reverse, which is why
+    // H(div) is a control on the covariant result rather than a restatement.
+    CHECK( div.n_constraints == 12 );
+    CHECK( div.n_misaligned == 4 );
 
     const CycleObs cyc = curlCycles( primal, *mp );
     reportCycles( cyc );
