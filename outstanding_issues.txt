@@ -412,7 +412,7 @@ transformation NEEDED.
      PERFORMED  synchronized tensor iteration over both sides.
      NEEDED     the same.  CORRECT.  Loops cell_dim 0 .. param_dim-1.
 
-  D. vector function-ID merge   VectorConformingMultiPatchSplineSpace.cpp:64
+  D. vector function-ID merge   VectorConformingMultiPatchSplineSpace.cpp:66
      AVAILABLE  the same, plus coordinateTransform and per-component offsets.
      PERFORMED  the same, with component mapping from
        coordinateTransform(atlas, glob_corner_cell).at(vec_comp) and sign via
@@ -673,18 +673,35 @@ STAGE 2 IS COMPLETE ONLY WHEN
   8. the H(curl) lower-dimensional merge question (row D) remains explicitly
      tracked as a SEPARATE BLOCKER before anyone claims complete 3D multipatch
      H(curl) support.  Stage 2 does not close it and must not imply it does.
-     [STILL OPEN BY DESIGN.  The former Phase 0 marker is RESOLVED: B's
-     H(div)/H(curl) shared == 2 rows were promoted to PERMANENT on 2026-10-05
-     when the degree sweep measured shared == p on both interface-orientation
-     classes.  Row D remains open pending the dedicated 3D edge-class and
-     orientation diagnostics; ABSENCE OF A PHASE 0 MARKER IS NOT EVIDENCE OF
-     CLOSURE.  The 3D column-match table was REASSIGNED to step e on 2026-10-05
-     and must remain assigned to step e, not row D.]
+     [CLOSED NARROWLY 2026-10-07, in M1's required CLOSURE LANGUAGE and no
+     stronger: "Face-level merging with oriented union-find transitivity
+     correctly merges the tested 3D H(curl) edge classes for cyclic and
+     valence-three face-connected configurations supported by the current API."
+     THE EVIDENCE is the step 5 through step 9 diagnostics in
+     test/RowD_Diagnostics_test.cpp: the four-patch cyclic and swept
+     three-patch valence-three fixtures with their orientation-reversing
+     variants, carrying per-constraint assertions rather than final edge-ID
+     counts as this row demanded; the step 6 covariant and step 7 contravariant
+     sign rules rerun over all 144 reachable interface classes with zero id,
+     count and sign mismatches; and the step 9 find_change gate.
+     WHAT IS NOT CLOSED: M1 itself stays ARGUED-FROM-CODE.  Fixtures refute and
+     do not prove, so this is NOT "transitivity for everything expressible",
+     and M5 stays open on its items (iii) and (iv) - the phi dependence and the
+     det J = +1 orientation argument - neither of which wants code.
+     THE EARLIER NOTE STANDS ON ITS OWN TERMS: the former Phase 0 marker was
+     RESOLVED on 2026-10-05 when the degree sweep measured shared == p on both
+     interface-orientation classes, and ABSENCE OF A PHASE 0 MARKER WAS NOT
+     EVIDENCE OF CLOSURE; what closes this row narrowly is the dedicated 3D
+     edge-class and orientation diagnostics it was waiting for.  The 3D
+     column-match table was REASSIGNED to step e on 2026-10-05 and must remain
+     assigned to step e, not row D.]
 
   FRAMING: with 1-7 satisfied, STAGE 2'S SIDE-AWARE INTERFACE-CONSUMER REPAIR
   IS COMPLETE.  That is the claim, and it is deliberately scoped: it does NOT
-  certify complete 3D multipatch H(curl) support.  Row D (criterion 8) remains
-  a separately tracked blocker, trace column ordering (step e) is untouched,
+  certify complete 3D multipatch H(curl) support.  Row D (criterion 8) was
+  closed NARROWLY on 2026-10-07 in M1's closure language, a statement about
+  tested configurations and not about everything expressible, so it does not
+  certify that support either; trace column ordering (step e) is untouched,
   and the phi refactor stays deferred to a separate later commit - it was
   optional from the outset, and separating it is precisely what preserved phi
   as an independent oracle, so it is not a gate on this completion.
@@ -1089,3 +1106,63 @@ KNOWN NON-BLOCKING TEST-SUITE / ENVIRONMENT ITEMS
     Recent full-suite runs reported an Eigen comma-initializer assertion here.
     This appears to be a pre-existing critical-points algorithm issue and is not
     believed to be related to the basis-layer work.
+
+
+-------------------------------------------------------------------------------
+MEDIUM PRIORITY — Found 2026-10-07
+-------------------------------------------------------------------------------
+
+15. Non-Conforming Dart-Pair Gluings Are Accepted And Then Produce Invalid phi_3
+    File(s): src/topology/MultiPatchCombinatorialMap.cpp
+             initializeInterMapConnections()  permuteAcrossBoundary()
+
+    Status: MEASURED 2026-10-07, by a throwaway probe written while building
+    step 9's find_change gate and NOT retained.  No production change made.
+    BLOCKS MULTIPATCH AMR; see PREREQUISITE below.
+
+    The dart-pair constructor reduces two darts to a (side, side, permutation)
+    interface and never checks that the two sides carry the SAME element
+    decomposition under that permutation.  On a patch with 2 elements along s
+    and 1 along t and u, of the 144 reachable classes 48 are conforming and 96
+    are not.  Measured over all 144:
+
+      conforming, sound          48   phi_3 in range and involutive on the
+                                      interface, for every one of them
+      non-conforming, broken     80   phi_3 returns dart ids OUTSIDE the
+                                      multipatch range - ids up to 143 where
+                                      maxDartId is 95
+      non-conforming, undetected 16   neither out of range nor non-involutive,
+                                      hence silently wrong
+
+    NO CONFORMING GLUING IS AFFECTED, and the production fixtures glue
+    hand-picked conforming darts, so there is no evidence of a defect on valid
+    input.  The cost is DIAGNOSTIC: an invalid gluing is accepted silently and
+    surfaces later as "Dart out of range of multi patch cmap" thrown from
+    DartRanges::toLocalDart, naming neither the gluing nor the cause, at
+    whatever consumer first touches the returned dart.
+
+    MECHANISM: permuteAcrossBoundary flips via flipDart( tp_lengths, ... ),
+    where tp_lengths is the SOURCE side's boundary lengths, while ZeroToOne and
+    ZeroToThree transpose the two face axes.  When the two sides' extents
+    differ, the flip is taken against the wrong extent.
+
+    ENOUGH WOULD BE a check in initializeInterMapConnections comparing
+    boundaryLengths of the two sides under the permutation and throwing with
+    both side ids named.  Deliberately NOT done here: step 9 is a
+    characterization step, and no production change is warranted without a
+    fixture demonstrating a defect on VALID input.
+
+    PREREQUISITE FOR MULTIPATCH AMR, NOT A DIAGNOSTIC NICETY.  The paragraphs
+    above say the defect is unreachable TODAY, and only because every
+    production gluing is hand-picked and conforming.  Multipatch AMR removes
+    that guarantee: refining patches independently CREATES exactly the
+    non-matching interfaces measured here, where 80 of 96 return an
+    out-of-range phi_3 and 16 are silently wrong.  The extent check must
+    therefore land BEFORE multipatch AMR is allowed to create or accept a
+    non-matching interface - either as a hard throw, or as the gate behind
+    whatever non-matching support replaces it.  This is blocking work for that
+    step, not deferred polish.
+
+    CONSEQUENCE FOR THE TESTS: step 9's find_change gate sweeps a UNIFORMLY
+    refined patch, where all 144 classes are conforming.  A patch refined along
+    one axis only would spend 96 of its 144 classes on invalid input.

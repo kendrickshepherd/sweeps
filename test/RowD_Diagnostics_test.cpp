@@ -24,6 +24,7 @@
 #include <CombinatorialMap1d.hpp>
 #include <ParametricAtlas.hpp>
 #include <SideCoordinateTransform.hpp>
+#include <CommonUtils.hpp>
 #include <IndexOperations.hpp>
 #include <UnionFind.hpp>
 #include <VectorConformingTPSplineSpace.hpp>
@@ -1603,14 +1604,14 @@ TEST_CASE( "STEP 8: coordinateTransform against sideCoordinateTransform, all 3d 
         // parity formula above, s_n, from getFrame's inward corner.  Both are
         // compared against production, which reads this entry's aligned flag
         // straight into uf.unite for H(div) (VectorConformingMultiPatch-
-        // SplineSpace.cpp:104,143).  Since det J = sgn(sigma) * prod_i s_i,
+        // SplineSpace.cpp:106,143).  Since det J = sgn(sigma) * prod_i s_i,
         // their agreement is ALGEBRAICALLY EQUIVALENT to det J = +1, so the
         // check below is an INTERPRETATION of an agreement already measured,
         // not a third confirmation of it.  What it says is that gluing two
         // parent cubes along a face is orientation PRESERVING on every
-        // reachable class, verified here by enumeration.  Proving that without
-        // enumeration needs an orientation argument for the dart-pair
-        // constructor, which is not yet recorded; see M5 STEP 8.
+        // reachable class, verified here by enumeration.  Proving it without
+        // enumeration reduces to one premise about the dart-pair constructor;
+        // see M5 STEP 9.
         bool det_positive = axisPermutationEven( side_a, side_b, t );
         if( not expected.at( side_a / 2 ).second ) det_positive = not det_positive;
         for( size_t d = 0; d < t.source_axis_reversed.size(); d++ )
@@ -1737,4 +1738,238 @@ TEST_CASE( "STEP 8: the step 6 and 7 interface sign rules over all 3d gluing cla
     // it, so the permutation parity in the contravariant rule carries
     // information no covariant rule supplies anywhere but at a few points.
     CHECK( n_disagree == 72 );
+}
+
+
+namespace
+{
+    // STEP 9 (M5 item ii, soft spot b).  find_change returns the FIRST
+    // coordinate differing from the frame origin by more than 1e-10 and throws
+    // if none does, so coordinateTransform is well defined only when each
+    // frame corner differs from the origin in EXACTLY ONE coordinate.  The
+    // MARGIN is measured too: a property holding only barely above the
+    // tolerance would be fragile rather than true, and find_change is silent
+    // rather than diagnostic if two coordinates differ.
+    struct FrameObs
+    {
+        size_t n_frames = 0;
+        size_t n_corners = 0;
+        size_t n_not_exactly_one = 0; // corners failing the property itself
+        size_t n_repeated_axis = 0;   // two corners of one frame changing the same axis
+        size_t n_no_partner = 0;      // interface cell whose far side is absent
+        double min_changing = std::numeric_limits<double>::max();
+        double max_unchanging = 0.0;
+    };
+
+    void observeFrame( const SmallVector<param::ParentPoint, 4>& frame, const size_t dim, FrameObs& o )
+    {
+        o.n_frames++;
+        std::set<size_t> axes;
+        for( size_t corner = 1; corner <= dim; corner++ )
+        {
+            o.n_corners++;
+            size_t n_changing = 0, which = 0;
+            for( size_t i = 0; i < dim; i++ )
+            {
+                const double a = frame.at( corner ).mPoint( i );
+                const double b = frame.at( 0 ).mPoint( i );
+                // The same predicate find_change uses, not a restatement of it.
+                if( not util::equals( a, b, 1e-10 ) )
+                {
+                    n_changing++;
+                    which = i;
+                    o.min_changing = std::min( o.min_changing, std::abs( a - b ) );
+                }
+                else o.max_unchanging = std::max( o.max_unchanging, std::abs( a - b ) );
+            }
+            if( n_changing != 1 ) o.n_not_exactly_one++;
+            else if( not axes.insert( which ).second ) o.n_repeated_axis++;
+        }
+    }
+
+    // The two frames coordinateTransform itself builds for one cell: the near
+    // one unreversed, the far one across phi_dim with reverse_dart.
+    void observeCellFrames( const param::ParametricAtlas& atlas,
+                                 const topology::Cell& cell,
+                                 const size_t dim,
+                                 FrameObs& o )
+    {
+        observeFrame( param::getFrame( atlas, cell ), dim, o );
+        const auto far = phi( atlas.cmap(), dim, cell.dart() );
+        if( not far.has_value() )
+        {
+            o.n_no_partner++;
+            return;
+        }
+        observeFrame( param::getFrame( atlas, topology::Cell( far.value(), dim - 1 ), true ), dim, o );
+    }
+}
+
+TEST_CASE( "STEP 9: find_change is well defined on every frame in the tested two-patch tensor-product configurations", "[rowd]" )
+{
+    const KnotVector kv( { 0, 0, 0, 1, 1, 1 }, ptol );
+    const auto cmap_1d = std::make_shared<const CombinatorialMap1d>( numElements( kv ) );
+    const auto param_1d = std::make_shared<const param::ParametricAtlas1d>( cmap_1d, parametricLengths( kv ) );
+    const auto cmap_2d = std::make_shared<const TPCombinatorialMap>( cmap_1d, cmap_1d );
+    const auto param_2d = std::make_shared<const param::TPParametricAtlas>( cmap_2d, param_1d, param_1d );
+    const auto cmap_3d = std::make_shared<const TPCombinatorialMap>( cmap_2d, cmap_1d );
+    const auto param_3d = std::make_shared<const param::TPParametricAtlas>( cmap_3d, param_2d, param_1d );
+
+    // 3d, over the same exhaustion of the 144 interface classes as step 8, and
+    // over all four darts of each interface face, because production calls
+    // coordinateTransform once per dart.
+    FrameObs o3;
+    size_t n_built = 0, n_rejected = 0;
+    const auto classes = gluingClasses3d( n_built, n_rejected );
+    REQUIRE( classes.size() == 144 );
+    for( const auto& [cls, conns] : classes )
+    {
+        const auto mp = buildMultiPatch3d( 2, conns );
+        const param::MultiPatchParametricAtlas atlas(
+            mp, std::vector<std::shared_ptr<const param::TPParametricAtlas>>{ param_3d, param_3d } );
+        for( Dart::IndexType local_d = 0; local_d < 24; local_d++ )
+        {
+            const Dart gd = mp->toGlobalDart( 0, Dart( local_d ) );
+            if( not phi( *mp, 3, gd ).has_value() ) continue;
+            observeCellFrames( atlas, Face( gd ), 3, o3 );
+        }
+    }
+
+    // 2d, swept the same way.  find_change and getFrame are dimension-generic
+    // and 2d exercises the three-corner branch, where the third corner is
+    // reached by phi^-1 rather than by phi {2,1,1}.
+    FrameObs o2;
+    size_t n_2d_pairs = 0;
+    for( Dart::IndexType da = 0; da < 4; da++ )
+    {
+        for( Dart::IndexType db = 0; db < 4; db++ )
+        {
+            std::shared_ptr<const MultiPatchCombinatorialMap> mp;
+            try
+            {
+                mp = std::make_shared<const MultiPatchCombinatorialMap>(
+                    std::vector<std::shared_ptr<const TPCombinatorialMap>>{ cmap_2d, cmap_2d },
+                    DartConnections{ { { 0, Dart( da ) }, { 1, Dart( db ) } } } );
+            }
+            catch( const std::exception& )
+            {
+                continue;
+            }
+            n_2d_pairs++;
+            const param::MultiPatchParametricAtlas atlas(
+                mp, std::vector<std::shared_ptr<const param::TPParametricAtlas>>{ param_2d, param_2d } );
+            for( Dart::IndexType local_d = 0; local_d < 4; local_d++ )
+            {
+                const Dart gd = mp->toGlobalDart( 0, Dart( local_d ) );
+                if( not phi( *mp, 2, gd ).has_value() ) continue;
+                observeCellFrames( atlas, Edge( gd ), 2, o2 );
+            }
+        }
+    }
+
+    // 3d and 2d again on REFINED patches, the case soft spot (b) called "not
+    // established in general".  Each frame still lies in one element, whose
+    // parent domain is the same unit box, but only a sweep shows that the phi
+    // path does not reach a corner belonging to a NEIGHBOURING element, where
+    // the parent coordinates would be that element's own.  Interior cells are
+    // swept as well as interface ones: getFrame is called at both.
+    //
+    // The patches are refined UNIFORMLY so that every pair of sides carries
+    // the same element decomposition.  Gluing sides whose decompositions
+    // differ is not a conforming interface, and the dart-pair constructor
+    // accepts it without complaint; see outstanding_issues.txt.
+    const KnotVector kv2( { 0, 0, 0, 0.5, 1, 1, 1 }, ptol );
+    const auto cmap_1d_2 = std::make_shared<const CombinatorialMap1d>( numElements( kv2 ) );
+    const auto param_1d_2 = std::make_shared<const param::ParametricAtlas1d>( cmap_1d_2, parametricLengths( kv2 ) );
+    const auto cmap_2d_2 = std::make_shared<const TPCombinatorialMap>( cmap_1d_2, cmap_1d_2 );
+    const auto param_2d_2 = std::make_shared<const param::TPParametricAtlas>( cmap_2d_2, param_1d_2, param_1d_2 );
+    const auto cmap_3d_2 = std::make_shared<const TPCombinatorialMap>( cmap_2d_2, cmap_1d_2 );
+    const auto param_3d_2 = std::make_shared<const param::TPParametricAtlas>( cmap_3d_2, param_2d_2, param_1d_2 );
+
+    // Both the side a dart lies on and its position within that side are
+    // functions of d.id() % 24 alone, so sweeping the hex-local positions
+    // covers the same 144 classes on a refined patch as on a single element.
+    const auto sweepRefined = [&]( const std::shared_ptr<const TPCombinatorialMap>& cmap,
+                                   const std::shared_ptr<const param::TPParametricAtlas>& param,
+                                   const size_t dim,
+                                   const Dart::IndexType n_local,
+                                   FrameObs& o_iface,
+                                   FrameObs& o_interior,
+                                   size_t& n_pairs ) {
+        bool interior_done = false;
+        for( Dart::IndexType da = 0; da < n_local; da++ )
+        {
+            for( Dart::IndexType db = 0; db < n_local; db++ )
+            {
+                std::shared_ptr<const MultiPatchCombinatorialMap> mp;
+                try
+                {
+                    mp = std::make_shared<const MultiPatchCombinatorialMap>(
+                        std::vector<std::shared_ptr<const TPCombinatorialMap>>{ cmap, cmap },
+                        DartConnections{ { { 0, Dart( da ) }, { 1, Dart( db ) } } } );
+                }
+                catch( const std::exception& )
+                {
+                    continue;
+                }
+                n_pairs++;
+                const param::MultiPatchParametricAtlas atlas(
+                    mp, std::vector<std::shared_ptr<const param::TPParametricAtlas>>{ param, param } );
+                iterateDartsWhile( *mp, [&]( const Dart& gd ) {
+                    if( mp->toLocalDart( gd ).first != 0 ) return true;
+                    const auto far = phi( *mp, static_cast<int>( dim ), gd );
+                    if( not far.has_value() ) return true;
+                    // Interface cells for every gluing; interior cells once,
+                    // since those do not depend on the gluing.
+                    if( mp->toLocalDart( far.value() ).first != 0 )
+                        observeCellFrames( atlas, topology::Cell( gd, dim - 1 ), dim, o_iface );
+                    else if( not interior_done )
+                        observeCellFrames( atlas, topology::Cell( gd, dim - 1 ), dim, o_interior );
+                    return true;
+                } );
+                interior_done = true;
+            }
+        }
+    };
+
+    FrameObs o3r, o3i, o2r, o2i;
+    size_t n_3d_refined_pairs = 0, n_2d_refined_pairs = 0;
+    sweepRefined( cmap_3d_2, param_3d_2, 3, 24, o3r, o3i, n_3d_refined_pairs );
+    sweepRefined( cmap_2d_2, param_2d_2, 2, 4, o2r, o2i, n_2d_refined_pairs );
+
+    std::cout << "STEP 9: find_change well-definedness" << std::endl;
+    for( const auto& [label, o] : { std::pair<std::string, FrameObs>{ "3d, one element", o3 },
+                                    std::pair<std::string, FrameObs>{ "2d, one element", o2 },
+                                    std::pair<std::string, FrameObs>{ "3d refined, interface", o3r },
+                                    std::pair<std::string, FrameObs>{ "3d refined, interior", o3i },
+                                    std::pair<std::string, FrameObs>{ "2d refined, interface", o2r },
+                                    std::pair<std::string, FrameObs>{ "2d refined, interior", o2i } } )
+    {
+        std::cout << "  " << label << ": frames " << o.n_frames << ", corners " << o.n_corners
+                  << ", corners not changing exactly one coordinate " << o.n_not_exactly_one
+                  << ", frames repeating an axis " << o.n_repeated_axis << "; smallest change "
+                  << o.min_changing << ", largest non-change " << o.max_unchanging << std::endl;
+        CHECK( o.n_frames > 0 );
+        CHECK( o.n_no_partner == 0 );
+        CHECK( o.n_not_exactly_one == 0 );
+
+        // Each corner changes a DIFFERENT axis, so the dim corners span the dim
+        // axes and coordinateTransform writes every entry exactly once.  Step 8
+        // measured the consequence; this measures the cause.
+        CHECK( o.n_repeated_axis == 0 );
+
+        // THE TOLERANCE IS NOT LOAD-BEARING.  On these parent domains the
+        // separation is total: coordinates that change do so by a full parent
+        // extent and coordinates that do not are bitwise equal, so the 1e-10
+        // threshold sits many orders of magnitude inside the gap rather than
+        // adjudicating near it.
+        CHECK( o.max_unchanging == 0.0 );
+        CHECK( o.min_changing > 1e-6 );
+    }
+    CHECK( n_2d_pairs == 16 );
+    CHECK( n_3d_refined_pairs == 576 );
+    CHECK( n_2d_refined_pairs == 16 );
+    std::cout << "  dart pairs built: 2d one element " << n_2d_pairs << " of 16, 3d refined "
+              << n_3d_refined_pairs << " of 576, 2d refined " << n_2d_refined_pairs << " of 16"
+              << std::endl;
 }

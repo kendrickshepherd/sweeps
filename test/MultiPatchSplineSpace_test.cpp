@@ -7,6 +7,8 @@
 #include <CommonUtils.hpp>
 #include <MFEMOutput.hpp>
 #include <fstream>
+#include <filesystem>
+#include <system_error>
 
 using namespace topology;
 using namespace param;
@@ -214,14 +216,27 @@ TEST_CASE( "MFEM Output" )
     
     const Eigen::MatrixXd cpts = multiPatchCoefficients( ss, { cpts0, cpts1 } );
 
-    const std::string filename = "simple_3d_two_patch.mesh";
+    // Written to a temp dir, not the working directory, and removed on scope
+    // exit.  The non-throwing remove: a destructor is implicitly noexcept, so a
+    // failed cleanup would terminate the test binary.
+    const std::filesystem::path filename =
+        std::filesystem::temp_directory_path() / "simple_3d_two_patch.mesh";
+    struct Remover
+    {
+        std::filesystem::path path;
+        ~Remover() noexcept
+        {
+            std::error_code ignored;
+            std::filesystem::remove( path, ignored );
+        }
+    } const remover{ filename };
 
-    io::outputMultiPatchSplinesToMFEM( ss, cpts.transpose(), filename );
+    io::outputMultiPatchSplinesToMFEM( ss, cpts.transpose(), filename.string() );
 
     std::ifstream file( filename );
     if( not file.is_open() )
     {
-        FAIL( "Could not open file " + filename );
+        FAIL( "Could not open file " + filename.string() );
     }
 
     std::string line;

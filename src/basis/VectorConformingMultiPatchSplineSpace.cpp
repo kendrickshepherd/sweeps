@@ -61,6 +61,8 @@ util::UnionFind unitedFunctions( const std::vector<std::shared_ptr<const VectorC
                                  const std::vector<size_t>& constituent_function_offsets )
 {
     const topology::MultiPatchCombinatorialMap& multi_cmap = atlas.cmap();
+    // Faces only.  Edge and vertex function classes merge transitively through
+    // shared faces; see outstanding_mathematics.txt M1.
     const size_t cell_dim = multi_cmap.dim() - 1;
 
     util::UnionFind uf( constituent_function_offsets.back() );

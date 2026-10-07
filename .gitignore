@@ -4,6 +4,10 @@ deps
 .DS_Store
 scripts/*.vtu
 
+# Test artifacts, when a test binary is run outside build/test
+*.mesh
+*.vtu
+
 StokesFlow/
 HW14_OneD_Diffusion_ConvergenceRate_ST/
 

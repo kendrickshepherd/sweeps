@@ -2,7 +2,7 @@ Outstanding Mathematics - Claims Requiring Formal Proof
 =======================================================
 Branch: piola_dev
 Created: 2026-10-01
-Revised: 2026-10-05 (review corrections; see REVISION LOG at the end)
+Revised: 2026-10-07 (steps 8 and 9; see REVISION LOG at the end)
 Companion to: outstanding_issues.txt (engineering work items)
 
 PURPOSE.  outstanding_issues.txt tracks what to BUILD.  This file tracks what is
@@ -60,7 +60,7 @@ An argument about the first is routinely mistaken for evidence about the second.
 M1. TRANSITIVITY OF FACE-LEVEL MERGING TO LOWER-DIMENSIONAL CELLS
 -------------------------------------------------------------------------------
   CLASS     ARGUED-FROM-CODE.  This is the headline unproved claim.
-  SITE      src/basis/VectorConformingMultiPatchSplineSpace.cpp:64
+  SITE      src/basis/VectorConformingMultiPatchSplineSpace.cpp:66
             (cell_dim = multi_cmap.dim() - 1), versus the scalar merge's
             cell_dim = 0 .. param_dim-1 at MultiPatchSplineSpace.cpp:278.
   CLAIM     Merging DOFs only on dim-1 faces, combined with oriented union-find
@@ -534,9 +534,12 @@ M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
             EXHAUSTIVELY VERIFIED against all 144 discrete 3d interface classes
             (STEP 8, 2026-10-07), the tangential one from the phi-free
             sideCoordinateTransform and the normal one from getFrame's inward
-            corner, cross-checked by the det J = +1 identity.  What remains
-            open is find_change's well-definedness and the dependence on phi,
-            neither of which any comparison of this kind can reach.
+            corner.  find_change's well-definedness is SUPPLIED by STEP 9
+            (2026-10-07).  What remains open is the dependence on phi, which no
+            comparison of this kind can reach, and the det J = +1 orientation
+            argument, exhaustively verified but not proved - the agreement of
+            the two normal derivations is ALGEBRAICALLY EQUIVALENT to det J,
+            so it is not an independent cross-check of it.
   SITE      src/param/ParametricAtlas.cpp:94-160 (getFrame, coordinateTransform).
   CLAIM     It derives the component map and sign from getFrame on both sides by
             comparing actual parent-point coordinate changes, never reading the
@@ -583,9 +586,14 @@ M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
             (b) find_change returns the FIRST coordinate differing by more than
             1e-10 and throws if none does.  Well-definedness requires exactly
             one coordinate to differ between a frame corner and the frame
-            origin.  True for axis-aligned tensor-product parent domains; not
-            established in general, and silent (first wins) rather than
-            diagnostic if two differ.
+            origin.  CLOSED BY STEP 9 (2026-10-07) over every frame in the
+            tested two-patch tensor-product configurations, which are those the
+            current API can express; see STEP 9 below for what that sweep covers
+            and what it does not.
+            True for axis-aligned tensor-product parent domains, which remains
+            the hypothesis rather than a theorem.  find_change is still silent
+            (first wins) rather than diagnostic if two coordinates differ; the
+            gate makes that a DETECTED condition rather than a safe one.
             (c) THE NORMAL BRANCH OF factor = ( coord != dim - 1 ) IS NOW
             CLOSED FOR H(div) (M4 STEP 7, 2026-10-06).  What the earlier text
             asked for - "its own derivation, or an independent
@@ -606,10 +614,11 @@ M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
               The closure was also fixture-scoped when written; STEP 8 below
               removed that limit, and additionally derives the term itself
               rather than only the H(div) sign that depends on it.
-  WHAT KEEPS M5 OPEN after step 8.  Three items, of which only (ii) wants
-            code.  Item (i) below, exhaustive coverage for both blocks, is now
-            SUPPLIED; it is kept here because the reasoning that retired it
-            matters.  Item (iv) was opened by the 2026-10-07 review.
+  WHAT KEEPS M5 OPEN after step 9.  TWO items, (iii) and (iv), and NEITHER
+            WANTS CODE.  Items (i) and (ii) are SUPPLIED, by steps 8 and 9
+            respectively; both are kept here because the reasoning that
+            retired them matters.  Item (iv) was opened by the 2026-10-07
+            review and is REDUCED, not closed, by step 9.
             (i) EXHAUSTIVE COVERAGE, for both blocks.  SUPPLIED BY STEP 8
             (2026-10-07): all 144 classes, enumerated by measurement rather
             than assumed, for the transform comparison and for the step 6 and 7
@@ -617,8 +626,11 @@ M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
             this is that the 144 is an exhaustion of the class set and not a
             larger collection of fixtures.
             (ii) find_change's exactly-one-changing-coordinate property, soft
-            spot (b) above, untouched by steps 7 and 8.  This is the only
-            remaining M5 item that wants CODE.
+            spot (b) above.  SUPPLIED BY STEP 9 (2026-10-07), the last M5 item
+            that wanted CODE: 19888 frames over six groups, zero corners
+            changing other than exactly one coordinate, and the stronger
+            property that the dim corners of a frame change dim DISTINCT
+            axes.
             (iii) coordinateTransform's DEPENDENCE ON phi, soft spot (a) above.
             The derived H(div) rule is phi-free, so it now corroborates
             coordinateTransform from outside phi for the NORMAL block as the
@@ -635,14 +647,17 @@ M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
             full-dimensional transition once the normal collar direction is
             included.  That justifies det J = +1 without enumeration, and so
             promotes step 8's measured agreement of s_div with s_normal from a
-            verified fact about 144 classes to a structural one.
+            verified fact about 144 classes to a structural one.  STEP 9
+            SUPPLIES THE SECOND HALF of that argument - that reversal implies
+            orientation preservation - and leaves the first half, that the
+            constructor reverses, ARGUED-FROM-CODE; see STEP 9 below.
   ENOUGH WOULD BE  SUPPLIED for both blocks by step 8 below, on the terms this
             field demanded: the reconciliation is derived from each
             convention's own definition and written down BEFORE being measured,
-            not fitted to the output it then judges.  What is left is a
-            property test asserting exactly one coordinate changes between
-            frame origin and each frame corner, and the phi dependence, which
-            no comparison of this kind can discharge.
+            not fitted to the output it then judges.  The property test
+            asserting exactly one coordinate changes between frame origin and
+            each frame corner is SUPPLIED by step 9.  What is left is the phi
+            dependence, which no comparison of this kind can discharge.
 
   STEP 8, the exhaustive reconciliation.  DERIVED, THEN MEASURED (2026-10-07).
   SITE test/RowD_Diagnostics_test.cpp, the two STEP 8 test cases.
@@ -683,7 +698,7 @@ M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
     been reached.
 
     TWO DERIVATIONS OF INDEPENDENT PROVENANCE, AND WHAT THEIR AGREEMENT DOES
-    AND DOES NOT SHOW.  VectorConformingMultiPatchSplineSpace.cpp:104 and :143
+    AND DOES NOT SHOW.  VectorConformingMultiPatchSplineSpace.cpp:106 and :143
     pass this entry's aligned flag STRAIGHT to uf.unite, and for H(div) the
     component read is the NORMAL one, so production's H(div) relative sign IS
     this entry - nothing else modifies it.  Step 7 derived that sign phi-free
@@ -737,7 +752,8 @@ M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
       rather than at two points: they disagree about whether anything flips on
       72 of the 144 classes.  Step 7 could only say that fixture A flips
       nowhere in H(curl) but twelve times in H(div), and D the other way.
-      Focused suite 10907 assertions in 10 cases; full suite 208/208.
+      Focused suite AT STEP 8: 10907 assertions in 10 cases; full suite
+      208/208.  Step 9 below adds one case.
 
     WHAT STEP 8 DOES NOT ESTABLISH.  A two-patch gluing graph is a TREE, so
     beta_1 = 0 and nothing in the coverage extension tests cycle consistency;
@@ -752,6 +768,86 @@ M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
     argued-from-code and not phi-free; what is phi-free about the normal entry
     is step 7's route to it.  And det J = +1 is verified by enumeration, not
     proved, per item (iv).
+
+
+  STEP 9, the find_change property gate.  MEASURED (2026-10-07).
+  SITE test/RowD_Diagnostics_test.cpp, the STEP 9 test case.
+
+    WHAT IS ASSERTED.  find_change takes the first coordinate differing from
+    the frame origin by more than 1e-10 and throws if none does, so
+    coordinateTransform is well defined only when each frame corner differs
+    from the origin in EXACTLY ONE coordinate.  The gate observes every frame
+    in the tested two-patch tensor-product configurations - the near one
+    unreversed and the far one with reverse_dart, the pair coordinateTransform
+    itself builds - and asserts, per group: no corner changes other than
+    exactly one coordinate, no two corners of one frame change the SAME axis,
+    no changing coordinate moves less than 1e-6, and no unchanging coordinate
+    moves at all.
+
+    MEASURED over six groups, 19888 frames and 59552 corners:
+      3d, one element         1152 frames  the 144 classes, 4 darts per face
+      2d, one element           32         16 dart pairs
+      3d refined, interface  18432         576 pairs on a 2x2x2 patch
+      3d refined, interior     192         faces between elements
+      2d refined, interface     64         16 pairs on a 2x2 patch
+      2d refined, interior      16
+    Corners changing other than exactly one coordinate: ZERO.  Frames with two
+    corners on the same axis: ZERO.  Smallest change exactly 1 and largest
+    non-change exactly 0, in every group.
+
+    THE SECOND PROPERTY IS THE STRONGER ONE.  Exactly-one-changing is what
+    makes find_change WELL DEFINED; dim corners changing dim DISTINCT axes is
+    what makes coordinateTransform's map TOTAL, every entry written exactly
+    once.  Step 8 measured that as a consequence; this measures it as the cause.
+
+    THE TOLERANCE IS NOT LOAD-BEARING, and that is now measured rather than
+    assumed.  Parent coordinates are per-element, so a changing coordinate
+    moves a full parent extent - exactly 1 in every group, refined patches
+    included - while an unchanging one is bitwise equal.  The 1e-10 threshold
+    sits ten orders of magnitude inside that gap rather than adjudicating near
+    it.  REFINEMENT DOES NOT SHRINK THE GAP: that is the one thing the refined
+    sweeps add here, and the reason for running them.
+
+    PROGRESS ON ITEM (iv), NOT ITS CLOSURE.  The "therefore" half of the
+    strategy item (iv) records is short enough to derive here.  Let F be the
+    glued face, nu_a and nu_b the two patches' OUTWARD normals at F, and J the
+    signed-permutation Jacobian of the transition from patch a's parent
+    coordinates to patch b's.  Two patches meet from opposite sides, so
+      J nu_a = -nu_b.
+    Take ( nu_a, f_1, f_2 ) positively oriented, f_1 and f_2 tangential.  Then
+      det J = sign( J nu_a, J f_1, J f_2 ) = -sign( nu_b, J f_1, J f_2 ),
+    so det J = +1 exactly when ( J f_1, J f_2 ) is NEGATIVELY oriented for the
+    boundary orientation nu_b induces on F, while ( f_1, f_2 ) was positively
+    oriented for the one nu_a induces.  That is:
+      det J = +1  <==>  the tangential identification REVERSES the induced
+      boundary orientation of the glued face.
+    DERIVED, and it is the whole of item (iv)'s "and therefore produces an
+    orientation-preserving full-dimensional transition once the normal collar
+    direction is included".  What it does NOT supply is the other half: that
+    the dart-pair constructor's identification does reverse that orientation.
+    That premise is a property of phi_3's construction, asserted in production
+    at exactly one place - the constexpr bool reverse = true at
+    src/basis/VectorConformingMultiPatchSplineSpace.cpp:102, whose comment
+    states it without argument - and is therefore ARGUED-FROM-CODE.
+      SO ITEM (iv) IS NO LONGER INDEPENDENT.  It now rests on a single
+      combinatorial fact about the inter-patch phi_3, which is the kind of
+      statement the planned phi refactor is meant to put in one place where it
+      can be stated and checked.  It is NOT the same as item (iii), which is
+      about coordinateTransform reaching its corners THROUGH phi, but both
+      discharge against that refactor, and neither is closed here.
+
+    WHAT STEP 9 DOES NOT ESTABLISH.  A property measured over the two-patch
+    configurations the current API can express: both dimensions, one-element
+    and uniformly refined patches, interface and interior cells, every gluing
+    class.  It is not a proof about arbitrary parent domains.  Soft spot (b)'s
+    "axis-aligned tensor-product parent domains" remains the hypothesis under
+    which the property is expected to hold, and nothing measured here would
+    survive a non-tensor-product parent cell.  Three or more patches are
+    outside it, as is non-conforming refinement across an interface - the
+    latter because the dart-pair constructor ACCEPTS non-conforming gluings and
+    then yields invalid darts, a validation gap found while building this gate
+    and recorded as outstanding_issues.txt item 15.  No conforming gluing is
+    affected by it.
 
 
 -------------------------------------------------------------------------------
@@ -1102,3 +1198,47 @@ REVISION LOG
       phi path, so it is phi-free only by the step 7 route; and det J = +1 is
       verified rather than proved.  Focused suite 10907 assertions in 10
       cases, full suite 208/208.
+  2026-10-07  Step 9, the find_change property gate (same file):
+    - The exactly-one-changing-coordinate property is now ASSERTED over every
+      frame getFrame builds on the two-patch configurations the current API
+      can express: 19888 frames, 59552 corners, in both dimensions, on
+      one-element and uniformly refined patches, at interface AND interior
+      cells.  Zero corners change other than exactly one coordinate.
+    - The STRONGER property is also asserted and also holds: the dim corners
+      of a frame change dim DISTINCT axes, so coordinateTransform's map is
+      TOTAL.  Step 8 measured that as a consequence; this measures the cause.
+    - The 1e-10 tolerance is measured NOT to be load-bearing: changing
+      coordinates move exactly 1 and unchanging ones exactly 0, in every
+      group, refined patches included.  Refinement does not shrink the gap.
+    - M5 item (ii) and soft spot (b) are SUPPLIED.  That was the last M5 item
+      wanting CODE; M5 stays open on (iii) the phi dependence and (iv)
+      det J = +1, neither of which does.
+    - Item (iv) is REDUCED, not closed.  Derived here: det J = +1 if and only
+      if the tangential identification REVERSES the induced boundary
+      orientation of the glued face, via J nu_a = -nu_b.  That is the whole
+      "therefore" half of the strategy.  The remaining premise - that the
+      dart-pair constructor's identification does reverse it - is asserted in
+      production at one place only, the constexpr bool reverse = true at
+      VectorConformingMultiPatchSplineSpace.cpp:102, and stays
+      ARGUED-FROM-CODE.  It discharges against the planned phi refactor.
+    - ROW D CLOSED NARROWLY in M1's closure language and no stronger; see
+      outstanding_issues.txt criterion 8.  M1 itself stays ARGUED-FROM-CODE.
+    - FOUND WHILE BUILDING THE GATE, and recorded as outstanding_issues.txt
+      item 15: the dart-pair constructor accepts NON-CONFORMING gluings, and
+      inter-patch phi_3 then returns invalid darts - on a patch refined along
+      one axis, out of range in 80 of the 96 non-conforming classes and
+      silently wrong in the other 16.  All 48 conforming classes are sound, so
+      there is no evidence of a defect on valid input; the cost is diagnostic.
+      No production change made.  This is why the gate sweeps a UNIFORMLY
+      refined patch.
+    - A first draft of the gate swept a patch refined along one axis only and
+      failed with "Dart out of range of multi patch cmap".  The first
+      diagnosis - that phi_3 itself was defective for multi-element patches -
+      was WRONG and was checked before being recorded: phi_3 never throws, it
+      returns an out-of-range dart that the next consumer rejects, and only
+      for non-conforming input.
+    - Removed 592 tautological REQUIRE( far.has_value() ) assertions from the
+      gate's helper, which re-checked what every caller had just tested; the
+      condition is now counted and asserted once per group.  The focused suite
+      count therefore reflects coverage, not padding.  Focused suite 10947
+      assertions in 11 cases, full suite 209/209.
