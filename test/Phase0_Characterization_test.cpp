@@ -239,15 +239,11 @@ TEST_CASE( "EXPERIMENT A: requested versus effective leaves at an asymmetric int
     }
     CHECK( ss.numFunctions() == 24 );
 
-    // TEMPORARY (item 1): the vector-conforming builders currently REJECT this
-    // configuration.  When item 1 lands these become successful builds and this
-    // whole block must be replaced.
-    REQUIRE_THROWS_AS( buildHDivHierarchicalMultiPatchSplineSpace( ss ), std::invalid_argument );
-    REQUIRE_THROWS_WITH( buildHDivHierarchicalMultiPatchSplineSpace( ss ),
-                         Catch::Matchers::ContainsSubstring( "matching leaf elements" ) );
-    REQUIRE_THROWS_AS( buildHCurlHierarchicalMultiPatchSplineSpace( ss ), std::invalid_argument );
-    REQUIRE_THROWS_WITH( buildHCurlHierarchicalMultiPatchSplineSpace( ss ),
-                         Catch::Matchers::ContainsSubstring( "matching leaf elements" ) );
+    // PERMANENT (item 1): the vector-conforming builders accept the same
+    // asymmetric selection.  Hand-derived THB support-containment counts:
+    // 29 level-0 plus 8 level-1 functions for each.
+    CHECK( buildHDivHierarchicalMultiPatchSplineSpace( ss ).numFunctions() == 37 );
+    CHECK( buildHCurlHierarchicalMultiPatchSplineSpace( ss ).numFunctions() == 37 );
 }
 
 TEST_CASE( "EXPERIMENT B: elementwise cross-patch correspondence, 2d Flip1d", "[phase0]" )
@@ -536,4 +532,10 @@ TEST_CASE( "EXPERIMENT B6: mirrored 3d tangential knots are rejected on this sid
             twoPatchConnection( ElementSide( 0, false ), ElementSide( 0, true ),
                                 TPPermutation::ZeroToZero ) ),
         std::invalid_argument );
+    REQUIRE_THROWS_WITH(
+        buildH1MultiPatchSplineSpace(
+            { patch_A, patch_B },
+            twoPatchConnection( ElementSide( 0, false ), ElementSide( 0, true ),
+                                TPPermutation::ZeroToZero ) ),
+        Catch::Matchers::ContainsSubstring( "matching tangential spline parameterizations" ) );
 }

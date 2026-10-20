@@ -850,7 +850,7 @@ MEDIUM PRIORITY — Architectural / Correctness
    refinement-class rule requires it, never merely because the cell touches
    a multipatch interface.
 
-   ORDER.
+   ORDER (superseded by SEQUENCE 2026-10-20 below).
      1. Commit Step 10.
      2. Keep the refinement-level extent/parameterization check (first throw).
      3. Remove ONLY the active-leaf equality rejection (second throw).
@@ -960,6 +960,190 @@ MEDIUM PRIORITY — Architectural / Correctness
          not normalized to sum to one, so PoU stays on step 4's H1 leg.
      E11. Steps 4 and 8 run in 3D with more than two patches close action
          (b)'s open recheck.
+
+   AMENDED (2026-10-20, review of E1-E11).  E1-E5, E7, E8 and E10 confirmed.
+   E9: the cited work derives further conditions for hierarchical exactness;
+   exactness does not follow from conforming traces.  E11 counts only if the
+   3D test exercises ASYMMETRIC refinement at a junction or cycle, not merely
+   a generic three-patch configuration.  Two changes:
+     E6 REFRAMED.  One-level grading is NOT required by THB.  The definition
+       is support containment: supp b^l in Omega^l and not in Omega^(l+1).
+       The local pruning may reproduce that only under a one-level jump,
+       which is an implementation limitation or an explicit admissibility
+       policy, never the definition.  The 3-level jump-2 fixture compares the
+       current result against an INDEPENDENT full-support-containment
+       oracle.  If it fails: preferably implement full support containment,
+       which keeps refinement local; impose one-level grading SEPARATELY, if
+       at all, for conditioning, locality or bounded overlap.  Grading must
+       not become a silent prerequisite for conformity.
+     STEP 6 NEEDS A RICHER TRACE RECORD.  TraceMeshSide holds an element and
+       its WHOLE side, so it cannot represent a fine side covering part of a
+       coarse side.  Coarse-fine enumeration needs a common interface
+       FRAGMENT plus an affine embedding into each element side: translation
+       and scale, axis permutation and reversal, derived from the actual
+       parametric intervals, not from assumed dyadic index ratios.  Without
+       it the right pair can be found but the two traces cannot be evaluated
+       at the same physical points.
+   SEQUENCE (2026-10-20; supersedes ORDER above).
+     1. Commit Step 10.  [DONE: cc62833]
+     2. Pin which existing exception each current rejection reaches.
+     3. Separate the mesh-structure diagnostic; remove only leaf equality.
+     4. Algebraic correctness on Experiment A AND the tangentially refined
+        Phase 4a fixture.
+     5. The 3-level support-containment experiment; settle grading as a
+        separate policy.
+     6. Interface fragments and side embeddings; repair one-to-many
+        enumeration.
+     7. Off-node physical H1, H(div) and H(curl) trace tests.
+     8. 2D/3D orientation, refinement-direction, junction and cycle matrix.
+     9. A separate discrete-complex gate: composition to zero, plus
+        rank/nullity exactness on a contractible fixture.
+    10. Documentation, full suite, then automatic AMR.
+   STEP 2 RESULT (2026-10-20).  Which exception each current rejection
+   reaches, MEASURED by mutation probe: each of validateMatchingInterfaces'
+   two throws in turn was changed to std::runtime_error, the three binaries
+   that build the hierarchical vector space (Phase0, VectorConforming-
+   HierarchicalMultiPatchSplineSpace, TraceMesh) were rerun, and the source
+   was restored byte-identical (cmp; baseline rerun green).
+     Experiment A, H(div)      leaf-equality throw  (fails under that probe)
+     Experiment A, H(curl)     leaf-equality throw  (by elimination: passes
+                               under the extent probe, and only the two
+                               throws carry "matching leaf elements"; the
+                               H(div) REQUIRE aborts the case first)
+     Phase 4a rejects ...      leaf-equality throw  (fails under that probe)
+     extent throw              reached by NO test   (nothing fails under it)
+     B4                        knot-pattern check   (already pinned by text)
+     B6                        knot-pattern check   (now pinned by text,
+                               "matching tangential spline parameterizations")
+   So every live rejection on this path is leaf equality; the extent check
+   has no test, and step 3 must say how, or whether, it can be reached.
+   STEP 3 RESULT (2026-10-20).  validateMatchingInterfaces is renamed
+   validateInterfaceElementCounts.  The leaf-equality throw and its helper
+   sideLeafIndices are removed; the level-count throw is unchanged.  The
+   extent check keeps its condition and now reports what it found:
+     "... requires matching interface mesh structure at every refinement
+     level: at level L, patch side {p, s} has [n] interface elements under
+     PERM, but patch side {q, t} has [m]."
+   It compares element counts only, never knot values.  On the builder paths
+   the tests exercise, the strong level spaces reject knots first (B4, B6).
+   Reachability, MEASURED: a hierarchical complex over one discontinuously
+   glued level (1 vs 2 tangential elements) passes the hierarchical cmap,
+   atlas and basis-complex constructors and reaches the check through the
+   public constructor; issue 15's phi did not throw first in this single-
+   level fixture.  Pinned by "Hierarchical vector multipatch constructor
+   reports mismatched interface element counts".
+   CONTRACT CHANGE, not a refactor: the validator no longer rejects
+   asymmetric leaf selection, and both characterized supported fixtures
+   build.  That is all the evidence shows; it says nothing about other
+   asymmetric selections.  Flipped tests, with counts derived by hand from
+   THB support containment before the run (all matched):
+     Experiment A             H(div) 29+8 = 37, H(curl) 29+8 = 37
+     Phase 4a, renamed "builds asymmetric leaves across a tangentially
+     refined interface"       H1 9+12 = 21, H(div) 12+21 = 33, H(curl) 33
+   Counts are not correctness.  Activity by function, truncation and
+   extraction rows are step 4, still to do.
+   OPEN HAZARD (E3), MEASURED on Experiment A by a temporary probe (removed;
+   file restored byte-identical), refining patch 0 and then patch 1, for H1
+   and H(div): patchTraceMeshInterfaces returns ONE record per fixture, the
+   first-patch leaf against a NON-leaf partner; traceInterfaceElement on it
+   throws "unrefinedAncestorDartOfCell requires a leaf dart as input".  So
+   trace extraction fails loudly, but the enumeration itself is silently
+   wrong: it emits a record naming a non-leaf cell and omits the coarse
+   leaf's real coarse-fine pairing.  Already true for scalar H1 before step
+   3; step 3 extends it to H(div)/H(curl).  Repaired by step 6.
+   OPEN GAP, pre-existing (constructor consistency).  validateInterface-
+   ElementCounts reads the hierarchy map's level cmaps; it does not prove
+   that the refinement-level spaces passed to the public constructor are
+   the spaces that map describes, and when counts agree it never compares
+   knot locations.  The reachability test above combines inconsistent
+   objects on purpose (a discontinuous level cmap with a strongly merged
+   level space) to reach the check.  A real consistency check would compare
+   each level space's constituents and knot vectors against the atlas.
+   REVIEW OF STEPS 3 AND 4 (2026-10-20).  Do not commit the step 3 contract
+   change until step 4's correctness gates land; commit 3 and 4 together.
+   Counts alone are too weak.  Step 4 adjustments:
+     Oracle: classify each level cell by full parametric-BOX containment in
+       Omega^l and Omega^(l+1) (inside, outside, or FAIL on partial overlap),
+       not by cell centre.  Compare (level, function) pairs as multisets, or
+       assert injectivity separately.
+     Truncation: rank-revealing solve; assert the local fine extraction
+       matrix has full rank before trusting coefficients.  Normalize
+       multipatch orientation signs before comparing; never compare only
+       absolute values.  Compare per vector component: the vector extraction
+       is block-diagonal in scalar B-spline components (no metric scaling;
+       Piola acts later, in physical evaluation).
+     "Nonzero only on fine shared functions" is a fixture-specific expected
+       result, not a THB invariant; derive the shared set independently.
+     Column sum one holds only with the complete coarse trace basis of one
+       scalar component; assert it per component, as a secondary check.
+       Same coefficient on every element, after orientation normalization,
+       is a consistency check.
+     Check 4: compare rows after aligning function ids, component blocks and
+       orientation, to a tight tolerance, not literal equality.
+     Check 5: the extraction rows sum to the all-ones Bernstein vector (every
+       column sum is one); individual rows need not sum to one.
+     Phase 0 stays count-level.  Step 4 tests may live in a dedicated
+       shared-interface-refinement test file, which scales into steps 6-8.
+     multipatch_development_workflow.txt's restriction paragraph is stale and
+       is fixed now, with support-containment wording for excluded fine
+       functions.
+   STEP 4 RESULT (2026-10-20).  test/SharedInterfaceRefinement_test.cpp,
+   2 cases, 8206 assertions, green; full suite 221/221.  Fixtures:
+   Experiment A and the tangentially refined Phase 4a fixture, each for
+   H1, H(div), H(curl).  Per fixture and space:
+     - requested leaves equal the effective leaves and tile each patch;
+       the level spaces' cmaps are the hierarchy's level cmaps;
+     - active (level, function) pairs equal an independent oracle (box
+       containment in Omega^l and Omega^(l+1), partial overlap FAILS) as
+       multisets, plus injectivity and total count;
+     - (1) coarse shared functions active, (2) fine shared inactive; the
+       shared sets come from level-space connectivity, not the hierarchy;
+     - each hierarchical sign on a patch equals its level function's sign;
+     - (5) per component, after sign normalization, every Bernstein
+       column sums to one;
+     - (4) coarse leaves: rows equal the aligned, normalized level-0 rows;
+     - (3) fine leaves: H = A L with L square and of full rank (column-
+       pivoted QR); fine rows are unit vectors; coarse rows are zero on
+       active fine functions; one coefficient per (patch, coarse, fine)
+       on every element where the pair co-occurs; coarse shared rows equal
+       the hand values per component.  Secondary, per component: the
+       parent's complete coarse shared set is present and each fine shared
+       column sums to one.
+   FINDING: connectivity omits a truncated function that is identically
+   zero on a leaf.  On a fine leaf with no fine shared column the coarse
+   shared functions vanish and are absent, so the secondary check runs
+   only where a fine shared column exists.  The first run asserted it
+   everywhere and failed 9 times on exactly those leaves; a test
+   precondition error, not a defect.
+   Discrimination, MEASURED by mutation probes (each source restored, cmp
+   byte-identical, baseline green after).  Every probe failed every
+   fixture-space pair it touches:
+     P   vector prune erase disabled (VCHMP vectorActiveFuncs): 30, H(div)
+         and H(curl) only.  Primary: oracle multiset.  Downstream: no
+         coarse shared row survives on a fine leaf, so completeness,
+         column sums and both truncation counters fail.
+     Ps  scalar prune erase disabled (HierarchicalMultiPatchSplineSpace):
+         18, H1 only, same pattern.  The vector path never reaches it.
+     T   active_mask disabled (HierarchicalTPSplineSpace): 296, all three
+         spaces: partition of unity, zero rows, truncated zeros, fixture
+         zeros, hand values.  Oracle passes: activity is independent of
+         truncation.
+     S   hierarchical orientation negated on patch 1 only (VCHMP
+         patch_to_global): 72, ONLY the sign-alignment check, H(div) and
+         H(curl).  Every other check normalizes signs, so a coherent sign
+         error is invisible to them; the alignment check is the only guard.
+   ARGUED-FROM-CODE: scalar fidsToRefinementLevelFids writes each
+   hierarchical function once per constituent, last write wins, and never
+   checks that patches agree on the level function.  The per-patch row
+   checks above would catch a disagreement in these fixtures; the function
+   itself does not.  Not blocking steps 3 and 4.  This test reads the
+   hierarchy's H1 (level, function) pairs from it, so harden it before
+   step 5 relies on it: vectorFidsToRefinementLevelFids already throws
+   when patches disagree, and the scalar helper should do the same.
+   Limits: two levels, jump 1, two patches, 2D, patch 1 wholly coarse.
+   (1), (2) and the hand values are fixture-specific.  No physical traces;
+   E3 still open.  Steps 3 and 4 must be committed together; record the
+   commit hash here afterwards.
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces

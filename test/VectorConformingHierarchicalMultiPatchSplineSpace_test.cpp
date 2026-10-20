@@ -1,5 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_exception.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include <VectorConformingHierarchicalMultiPatchSplineSpace.hpp>
+#include <HierarchicalMultiPatchParametricAtlas.hpp>
 #include <MultiPatchSplineFactory.hpp>
 #include <TraceExtraction.hpp>
 #include <CombinatorialMapMethods.hpp>
@@ -499,7 +502,7 @@ TEST_CASE( "Phase 4a mixed-level 2D hierarchy keeps coarse away-from-interface f
     CHECK( intersectionSize( hcurl_first.at( 1 ), hcurl_second.at( 1 ) ) > 0 );
 }
 
-TEST_CASE( "Phase 4a rejects nonmatching hierarchical patch interfaces" )
+TEST_CASE( "Phase 4a builds asymmetric leaves across a tangentially refined interface" )
 {
     const double ptol = 1e-10;
     const KnotVector coarse_kv( { 0, 0, 0, 1, 1, 1 }, ptol );
@@ -527,11 +530,57 @@ TEST_CASE( "Phase 4a rejects nonmatching hierarchical patch interfaces" )
         dynamic_cast<const MultiPatchCombinatorialMap&>(
             fine_h1->basisComplex().parametricAtlas().cmap() );
 
-    CHECK_THROWS_AS(
-        buildHierarchicalSplineSpace(
-            { coarse_hdiv, fine_hdiv },
-            { topCellsForPatch( coarse_cmap, 1 ), topCellsForPatch( fine_cmap, 0 ) } ),
-        std::invalid_argument );
+    auto coarse_hcurl = std::make_shared<const VectorConformingMultiPatchSplineSpace>(
+        buildHCurlMultiPatchSplineSpace( *coarse_h1 ) );
+    auto fine_hcurl = std::make_shared<const VectorConformingMultiPatchSplineSpace>(
+        buildHCurlMultiPatchSplineSpace( *fine_h1 ) );
+
+    // Patch 1 coarse, patch 0 fine in both directions, so one coarse interface
+    // side faces two fine ones.  Counts are the THB support-containment counts,
+    // derived by hand: H1 9 + 12, H(div) and H(curl) 12 + 21.
+    const std::vector<std::vector<Cell>> leaves = { topCellsForPatch( coarse_cmap, 1 ),
+                                                    topCellsForPatch( fine_cmap, 0 ) };
+    CHECK( buildHierarchicalSplineSpace( { coarse_h1, fine_h1 }, leaves ).numFunctions() == 21 );
+    CHECK( buildHierarchicalSplineSpace( { coarse_hdiv, fine_hdiv }, leaves ).numFunctions() == 33 );
+    CHECK( buildHierarchicalSplineSpace( { coarse_hcurl, fine_hcurl }, leaves ).numFunctions() == 33 );
+}
+
+TEST_CASE( "Hierarchical vector multipatch constructor reports mismatched interface element counts" )
+{
+    // Reached through the public constructor by a discontinuously glued level
+    // whose interface sides have 1 and 2 tangential elements.
+    const double ptol = 1e-10;
+    const KnotVector one( { 0, 0, 0, 1, 1, 1 }, ptol );
+    const KnotVector two( { 0, 0, 0, 0.5, 1, 1, 1 }, ptol );
+    const auto patch_A = makePatch( { one, one }, { 2, 2 } );
+    const auto patch_B = makePatch( { one, two }, { 2, 2 } );
+    const InternalConnectionsMap connections =
+        twoPatchConnection( ElementSide( 0, false ), ElementSide( 0, true ), TPPermutation::Flip1d );
+
+    const MultiPatchSplineSpace glued = buildDiscontinuousMultiPatchSplineSpace( { patch_A, patch_B }, connections );
+    const auto level_bc = glued.basisComplexPtr();
+    const auto level_atlas = level_bc->parametricAtlasPtr();
+    const auto cmap = std::make_shared<const HierarchicalMultiPatchCombinatorialMap>(
+        std::vector<std::shared_ptr<const MultiPatchCombinatorialMap>>{ level_atlas->cmapPtr() },
+        std::vector<std::vector<Cell>>{ topCells( level_atlas->cmap() ) } );
+    const auto atlas = std::make_shared<const param::HierarchicalMultiPatchParametricAtlas>(
+        cmap, std::vector<std::shared_ptr<const param::MultiPatchParametricAtlas>>{ level_atlas } );
+    const auto primal_bc = std::make_shared<const HierarchicalMultiPatchBasisComplex>(
+        atlas, std::vector<std::shared_ptr<const MultiPatchBasisComplex>>{ level_bc } );
+    const auto vector_bc =
+        std::make_shared<const VectorConformingBasisComplex>( primal_bc, ConformingType::Divergence );
+
+    const auto matched_h1 = buildH1MultiPatchSplineSpace( { patch_A, patch_A }, connections );
+    const auto matched_hdiv =
+        std::make_shared<const VectorConformingMultiPatchSplineSpace>( buildHDivMultiPatchSplineSpace( matched_h1 ) );
+
+    CHECK_THROWS_MATCHES( VectorConformingHierarchicalMultiPatchSplineSpace( vector_bc, { matched_hdiv } ),
+                          std::invalid_argument,
+                          Catch::Matchers::MessageMatches(
+                              Catch::Matchers::ContainsSubstring( "interface mesh structure" ) &&
+                              Catch::Matchers::ContainsSubstring( "at level 0" ) &&
+                              Catch::Matchers::ContainsSubstring( "[1] interface elements" ) &&
+                              Catch::Matchers::ContainsSubstring( "has [2]." ) ) );
 }
 
 TEST_CASE( "Phase 4a all-fine 3D hierarchy has exact H(div) and H(curl) face sharing" )

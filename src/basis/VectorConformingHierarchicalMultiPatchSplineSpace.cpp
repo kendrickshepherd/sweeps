@@ -12,6 +12,7 @@
 #include <map>
 #include <numeric>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 
 using namespace basis;
@@ -62,40 +63,18 @@ namespace
         return out;
     }
 
-    std::set<SideIndex> sideLeafIndices( const topology::MultiPatchCombinatorialMap& level_cmap,
-                                         const std::vector<topology::Cell>& leaf_elements,
-                                         const size_t patch_id,
-                                         const ElementSide& side )
+    std::string formatExtents( const SideIndex& extents )
     {
-        const auto& patch_cmap = *level_cmap.constituents().at( patch_id );
-        const SmallVector<std::shared_ptr<const topology::CombinatorialMap1d>, 3> components =
-            topology::tensorProductComponentCMaps( patch_cmap );
-        const size_t normal_length =
-            topology::cellCount( *components.at( side.axis ), components.at( side.axis )->dim() );
-
-        std::set<SideIndex> out;
-        for( const topology::Cell& leaf : leaf_elements )
-        {
-            if( leaf.dim() != level_cmap.dim() ) continue;
-            const auto [leaf_patch, local_d] = level_cmap.toLocalDart( leaf.dart() );
-            if( leaf_patch != patch_id ) continue;
-
-            const topology::FullyUnflattenedDart unflat = topology::unflattenFull( patch_cmap, local_d );
-            const size_t normal_index = unflat.unflat_darts.at( side.axis ).id();
-            const bool on_side = side.lower ? normal_index == 0 : normal_index + 1 == normal_length;
-            if( not on_side ) continue;
-
-            SideIndex side_index;
-            for( size_t axis = 0; axis < patch_cmap.dim(); axis++ )
-            {
-                if( axis != side.axis ) side_index.push_back( unflat.unflat_darts.at( axis ).id() );
-            }
-            out.insert( side_index );
-        }
-        return out;
+        std::ostringstream out;
+        out << "[";
+        for( size_t ii = 0; ii < extents.size(); ii++ )
+            out << ( ii == 0 ? "" : ", " ) << extents.at( ii );
+        out << "]";
+        return out.str();
     }
 
-    void validateMatchingInterfaces(
+    // Element counts only; knot values are checked by the strong multipatch builders, not here.
+    void validateInterfaceElementCounts(
         const topology::HierarchicalMultiPatchCombinatorialMap& cmap,
         const std::vector<std::shared_ptr<const VectorConformingMultiPatchSplineSpace>>& refinement_levels )
     {
@@ -119,24 +98,17 @@ namespace
                     sideLengths( *level_cmap.constituents().at( second.constituent_id ), second_side );
                 const topology::SideCoordinateTransform transform = topology::sideCoordinateTransform(
                     level_cmap.dim(), first.side_id, second.side_id, connection.first );
-                if( topology::transformedExtents( transform, first_lengths ) != second_lengths )
-                    throw std::invalid_argument(
-                        "VectorConformingHierarchicalMultiPatchSplineSpace requires matching leaf elements across patch interfaces." );
-
-                const std::set<SideIndex> first_indices =
-                    sideLeafIndices( level_cmap, leaves.at( level_ii ), first.constituent_id, first_side );
-                const std::set<SideIndex> second_indices =
-                    sideLeafIndices( level_cmap, leaves.at( level_ii ), second.constituent_id, second_side );
-
-                std::set<SideIndex> permuted_first_indices;
-                for( const SideIndex& index : first_indices )
+                const SideIndex transformed_lengths = topology::transformedExtents( transform, first_lengths );
+                if( transformed_lengths != second_lengths )
                 {
-                    permuted_first_indices.insert( permuteTraceSideIndex( transform, index, first_lengths ) );
+                    std::ostringstream msg;
+                    msg << "VectorConformingHierarchicalMultiPatchSplineSpace requires matching interface mesh "
+                        << "structure at every refinement level: at level " << level_ii << ", patch side " << first
+                        << " has " << formatExtents( transformed_lengths ) << " interface elements under "
+                        << connection.first << ", but patch side " << second << " has "
+                        << formatExtents( second_lengths ) << ".";
+                    throw std::invalid_argument( msg.str() );
                 }
-
-                if( permuted_first_indices != second_indices )
-                    throw std::invalid_argument(
-                        "VectorConformingHierarchicalMultiPatchSplineSpace requires matching leaf elements across patch interfaces." );
             }
         }
     }
@@ -303,7 +275,7 @@ namespace basis
             throw std::invalid_argument(
                 "VectorConformingHierarchicalMultiPatchSplineSpace requires a HierarchicalMultiPatchBasisComplex." );
 
-        validateMatchingInterfaces( primal_hier_bc->parametricAtlas().cmap(), refinement_levels );
+        validateInterfaceElementCounts( primal_hier_bc->parametricAtlas().cmap(), refinement_levels );
 
         const VectorActiveFuncs active_funcs =
             vectorActiveFuncs( primal_hier_bc->parametricAtlas().cmap(), refinement_levels );

@@ -149,7 +149,7 @@ Important behavior:
 
 
 PHASE 4: HIERARCHICAL MULTIPATCH CONFORMING SPACES
-Status: COMPLETE WITH A CONSERVATIVE REFINEMENT RESTRICTION
+Status: COMPLETE; ASYMMETRIC INTERFACE REFINEMENT IN PROGRESS (item 1)
 -------------------------------------------------------------------------------
 
 Goals:
@@ -168,24 +168,36 @@ Capabilities:
   - Orientation-aware extraction.
   - Hierarchical discontinuous L2 construction.
   - Mixed-level refinement away from patch interfaces.
+  - Asymmetric leaf selection across same-mesh patch interfaces (see below).
 
-Current restriction:
+Interface contract:
 
-Strong vector-conforming interfaces currently require matching leaf-element
-selections on both patch sides at every level. This is more conservative than
-the THB mathematics requires when both patches have the same refinement meshes
-but select leaves asymmetrically.
+Strong vector-conforming interfaces require the same interface mesh structure
+at every refinement level: equal interface element counts on both patch sides
+(validateInterfaceElementCounts) and matching tangential knot
+parameterizations (the strong multipatch builders). Leaf selection may differ
+across an interface: one patch may be refined while its neighbour stays
+coarse.
 
-Planned extension:
+Active functions follow THB support containment: a level-l function is active
+when its support lies in Omega^l and not in Omega^(l+1). A fine merged
+interface function whose support reaches the unrefined patch is excluded by
+global support containment; the coarse merged function stays active and is
+truncated on the refined side.
 
-Relax the matching-leaf validator for same-mesh asymmetric leaf selection only
-after tests verify that:
+Verified algebraically on two two-patch 2D fixtures (H1, H(div), H(curl)):
+active functions against an independent support-containment oracle,
+truncation coefficients, unchanged rows on the unrefined patch, hierarchical
+signs equal to level signs, and per-component partition of unity after
+orientation normalization. See test/SharedInterfaceRefinement_test.cpp.
 
-  - the coarse merged interface function remains active,
-  - incompatible fine interface functions are pruned,
-  - fine patch-interior functions remain active,
-  - extraction on the refined side includes the surviving coarse contribution,
-  - H(div) normal and H(curl) tangential conformity are preserved.
+Not yet verified (outstanding_issues.txt item 1):
+
+  - coarse-fine trace enumeration: patchTraceMeshInterfaces pairs a leaf with
+    a non-leaf cell; it needs interface fragments with side embeddings,
+  - physical H(div) normal and H(curl) tangential conformity off nodes,
+  - leaf-level jumps greater than one across an interface,
+  - 3D, junctions, cycles, and discrete-complex exactness.
 
 Truly nonmatching patch meshes remain a future mortar or weak-coupling problem.
 
@@ -200,7 +212,7 @@ does not prescribe a Stokes, Navier-Stokes, Maxwell, DG, or Nitsche formulation.
 
 
 PHASE 5A: MESH-LEVEL ALGEBRAIC TRACE ENUMERATION
-Status: COMPLETE
+Status: COMPLETE FOR SAME-LEVEL INTERFACES; COARSE-FINE EXTENSION OPEN
 -------------------------------------------------------------------------------
 
 Goals:
@@ -217,7 +229,7 @@ Capabilities:
   - Cross-patch interface pairing.
   - Same-patch, same-level interior-face enumeration.
   - Broken-only interior filtering.
-  - Hierarchical patch-interface enumeration.
+  - Hierarchical patch-interface enumeration where both sides' leaves match.
   - 2D and 3D side-index permutations.
   - Continuous side-point permutations.
   - Conversion from a mesh-level trace interface to Phase 2 trace data.
@@ -227,8 +239,18 @@ Current limitations:
   - Same-patch hierarchical coarse-fine interior interfaces are not subdivided.
     Physical weak integration across such interfaces will require fine-side
     subdivision and mapping into the neighboring coarse side.
-  - Per-element alignment on flipped, multi-element patch interfaces requires
-    explicit verification before Phase 5B paired physical-trace tests.
+  - Cross-patch hierarchical coarse-fine interfaces are enumerated
+    incorrectly (MEASURED, outstanding_issues.txt item 1, E3):
+    patchTraceMeshInterfaces pairs a leaf with a non-leaf partner and omits
+    the coarse leaf's real coarse-fine pairing, and traceInterfaceElement
+    throws on that record. Repair is item 1 step 6: interface fragments with
+    affine side embeddings.
+  - Trace column ordering across flipped interfaces is not yet explicit:
+    TraceSideData has no ordering field (item 2, action e). Per-element
+    pairing on flipped, multi-element interfaces is verified (STAGE 2 in
+    outstanding_issues.txt): one shared side transform for trace and basis
+    consumers, all 16 2D and 144 3D interface classes, and the multi-element
+    3D fixture B5.
 
 
 PIOLA GATE: VOLUME SPATIAL EVALUATION
@@ -310,6 +332,8 @@ Prerequisites to finalize:
 
   - Document the 3D H(curl) tangent-frame ordering and orientation convention.
   - Verify flipped multi-element patch-interface DOF and element pairing.
+    [DONE: STAGE 2 in outstanding_issues.txt. Trace column ordering,
+    item 2 action e, remains.]
   - State whether each side quadrature routine uses parent-side or
     parametric-side points and pair it with the corresponding side measure.
 
@@ -416,7 +440,8 @@ CURRENT POSITION AND NEXT ACTION
 Current position:
 
   - Phases 0 through 4 are complete.
-  - Phase 5A is complete.
+  - Phase 5A is complete for same-level interfaces; cross-patch coarse-fine
+    enumeration is open (item 1, step 6).
   - The volume Piola gate is complete.
   - Phase 5B is the next implementation task.
 
@@ -424,7 +449,8 @@ Recommended next sequence:
 
   1. Finalize the Phase 5B TraceSpaceEvaluator contract.
   2. Finalize the 3D tangent-frame convention.
-  3. Verify flipped multi-element interface alignment.
+  3. Verify flipped multi-element interface alignment. [DONE: STAGE 2 in
+     outstanding_issues.txt.]
   4. Implement physical boundary traces.
   5. Implement paired patch-interface physical traces.
   6. Add 2D, 3D, affine, curved, H(div), and H(curl) tests.
