@@ -190,13 +190,18 @@ active functions against an independent support-containment oracle,
 truncation coefficients, unchanged rows on the unrefined patch, hierarchical
 signs equal to level signs, and per-component partition of unity after
 orientation normalization. See test/SharedInterfaceRefinement_test.cpp.
+Leaf-level jumps of two, across the interface and inside a patch, are verified
+on three-level 2D fixtures: activity for H1, H(div) and H(curl), and for H1
+partition of unity and one trace per function across faces inside a patch.
+One shared internal helper computes the active functions of the single-patch,
+multipatch and vector hierarchical spaces (item 1, STEP 5 FIX).
 
 Not yet verified (outstanding_issues.txt item 1):
 
   - coarse-fine trace enumeration: patchTraceMeshInterfaces pairs a leaf with
     a non-leaf cell; it needs interface fragments with side embeddings,
   - physical H(div) normal and H(curl) tangential conformity off nodes,
-  - leaf-level jumps greater than one across an interface,
+  - leaf-level jumps above two, or in 3D,
   - 3D, junctions, cycles, and discrete-complex exactness.
 
 Truly nonmatching patch meshes remain a future mortar or weak-coupling problem.

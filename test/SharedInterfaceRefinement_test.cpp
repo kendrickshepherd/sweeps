@@ -1,5 +1,5 @@
-// Item 1, step 4 (outstanding_issues.txt): algebraic correctness of asymmetric
-// THB leaf selection across a same-mesh multipatch interface.
+// Item 1, steps 4 and 5 (outstanding_issues.txt): algebraic correctness of
+// asymmetric THB leaf selection across a same-mesh multipatch interface.
 #include <catch2/catch_test_macros.hpp>
 #include <HierarchicalMultiPatchSplineSpace.hpp>
 #include <HierarchicalMultiPatchCombinatorialMap.hpp>
@@ -13,8 +13,10 @@
 #include <array>
 #include <cmath>
 #include <functional>
+#include <iterator>
 #include <map>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -328,13 +330,9 @@ namespace
         return ids.size() != conn.size();
     }
 
-    // Two levels, patch 1 entirely coarse.  Checks: (1) coarse shared functions
-    // active, (2) fine shared functions inactive, (3) truncation on fine
-    // leaves, (4) rows on coarse leaves, (5) per-component partition of unity.
-    void checkSharedInterfaceRefinement( const HierarchyView& v, const Fixture& fx )
+    // Requested leaves; they must be the effective leaves and tile both patches.
+    std::vector<LevelCell> requestedLeaves( const HierarchyView& v, const Fixture& fx )
     {
-        INFO( v.name );
-        REQUIRE( v.levels.size() == 2 );
         for( size_t level = 0; level < v.levels.size(); level++ )
             REQUIRE( &v.levels.at( level )->basisComplex().parametricAtlas().cmap() ==
                      v.cmap->refinementLevels().at( level ).get() );
@@ -354,7 +352,6 @@ namespace
             REQUIRE( requested_darts == effective_darts );
         }
 
-        // The requested leaves tile each patch.
         const auto& bp = fx.breakpoints.front();
         const double patch_measure = ( bp[0].back() - bp[0].front() ) * ( bp[1].back() - bp[1].front() );
         for( size_t patch = 0; patch < 2; patch++ )
@@ -365,10 +362,22 @@ namespace
                 if( leaves.at( a ).patch != patch ) continue;
                 covered += measure( leaves.at( a ).box );
                 for( size_t b = a + 1; b < leaves.size(); b++ )
-                    if( leaves.at( b ).patch == patch ) REQUIRE( overlap( leaves.at( a ).box, leaves.at( b ).box ) < geom_tol );
+                    if( leaves.at( b ).patch == patch )
+                        REQUIRE( overlap( leaves.at( a ).box, leaves.at( b ).box ) < geom_tol );
             }
             REQUIRE( std::abs( covered - patch_measure ) < geom_tol );
         }
+        return leaves;
+    }
+
+    // Two levels, patch 1 entirely coarse.  Checks: (1) coarse shared functions
+    // active, (2) fine shared functions inactive, (3) truncation on fine
+    // leaves, (4) rows on coarse leaves, (5) per-component partition of unity.
+    void checkSharedInterfaceRefinement( const HierarchyView& v, const Fixture& fx )
+    {
+        INFO( v.name );
+        REQUIRE( v.levels.size() == 2 );
+        const std::vector<LevelCell> leaves = requestedLeaves( v, fx );
 
         // Oracle against the space's (level, function) pairs, as multisets.
         const std::set<LevelFunction> expected = expectedActive( v, fx, leaves );
@@ -656,4 +665,215 @@ TEST_CASE( "Tangentially refined interface: THB activity, truncation and extract
     checkSharedInterfaceRefinement( viewOf( "H1", h1 ), fx );
     checkSharedInterfaceRefinement( viewOf( "H(div)", hdiv ), fx );
     checkSharedInterfaceRefinement( viewOf( "H(curl)", hcurl ), fx );
+}
+
+// Step 5: three levels, leaf-level jumps of two (E6), against full support
+// containment.
+namespace
+{
+    std::string where( const LevelCell& c )
+    {
+        std::ostringstream out;
+        out << "patch " << c.patch << " level " << c.level << " s in [" << c.box[0][0] << ", " << c.box[0][1] << "]";
+        return out.str();
+    }
+
+    std::string describe( const HierarchyView& v, const LevelFunction& f )
+    {
+        std::ostringstream out;
+        out << "L" << f.first << " f" << f.second;
+        for( size_t patch = 0; patch < v.level_local.at( f.first ).size(); patch++ )
+        {
+            if( not v.level_local.at( f.first ).at( patch ).contains( f.second ) ) continue;
+            const TPIndex tp = tpIndexOf( v, f.first, patch, f.second );
+            out << " p" << patch << "c" << componentOf( v, f.first, patch, f.second ) << "(" << tp[0] << "," << tp[1]
+                << ")";
+        }
+        return out.str();
+    }
+
+    std::string describe( const HierarchyView& v, const std::set<LevelFunction>& fs )
+    {
+        std::string out;
+        for( const LevelFunction& f : fs ) out += ( out.empty() ? "" : "; " ) + describe( v, f );
+        return out;
+    }
+
+    std::string joined( const std::vector<std::string>& lines )
+    {
+        std::string out;
+        for( const std::string& line : lines ) out += line + "\n";
+        return out;
+    }
+
+    void checkActivity( const HierarchyView& v,
+                        const std::set<LevelFunction>& expected,
+                        std::vector<std::string>& problems )
+    {
+        std::multiset<LevelFunction> actual;
+        for( const auto& [level, fid] : v.level_of ) actual.insert( { level, fid.id() } );
+        const std::set<LevelFunction> distinct( actual.begin(), actual.end() );
+        if( v.level_of.size() != v.hier->numFunctions() )
+            problems.push_back( v.name + ": level map size is not the function count" );
+        if( distinct.size() != actual.size() ) problems.push_back( v.name + ": two functions share a level function" );
+        std::set<LevelFunction> extra, missing;
+        std::set_difference(
+            distinct.begin(), distinct.end(), expected.begin(), expected.end(), std::inserter( extra, extra.end() ) );
+        std::set_difference( expected.begin(),
+                             expected.end(),
+                             distinct.begin(),
+                             distinct.end(),
+                             std::inserter( missing, missing.end() ) );
+        if( not extra.empty() ) problems.push_back( v.name + ": active, not expected: " + describe( v, extra ) );
+        if( not missing.empty() ) problems.push_back( v.name + ": expected, not active: " + describe( v, missing ) );
+    }
+
+    struct LeafRows
+    {
+        LevelCell info;
+        std::vector<FunctionId> conn;
+        Eigen::MatrixXd rows;
+    };
+
+    // H1 with t unrefined, so every leaf spans t.  On each leaf the rows sum to
+    // one; across each s-face inside a patch every function has one trace.
+    // Bernstein columns run s fastest.  Returns the number of faces.
+    size_t checkH1Conformity( const HierarchyView& v,
+                              const Fixture& fx,
+                              const TPIndex& degrees,
+                              std::vector<std::string>& problems )
+    {
+        const Eigen::Index ns = static_cast<Eigen::Index>( degrees[0] + 1 );
+        const Eigen::Index nt = static_cast<Eigen::Index>( degrees[1] + 1 );
+        const auto& t_bp = fx.breakpoints.front()[1];
+        REQUIRE( t_bp.size() == 2 );
+        std::vector<LeafRows> leaves;
+        for( const Cell& c : topCells( *v.cmap ) )
+        {
+            const auto [level, level_d] = v.cmap->unrefinedAncestorDartOfCell( c );
+            LeafRows leaf{ levelCellInfo( v, fx, level, Cell( level_d, c.dim() ) ),
+                           v.hier->connectivity( c ),
+                           v.hier->extractionOperator( c ) };
+            REQUIRE_FALSE( hasDuplicates( leaf.conn ) );
+            REQUIRE( leaf.rows.rows() == static_cast<Eigen::Index>( leaf.conn.size() ) );
+            REQUIRE( leaf.rows.cols() == ns * nt );
+            REQUIRE( std::abs( leaf.info.box[1][0] - t_bp.front() ) < geom_tol );
+            REQUIRE( std::abs( leaf.info.box[1][1] - t_bp.back() ) < geom_tol );
+            const double pou = ( leaf.rows.colwise().sum().array() - 1.0 ).abs().maxCoeff();
+            if( pou > coeff_tol )
+                problems.push_back( v.name + ": rows on " + where( leaf.info ) + " miss partition of unity by " +
+                                    std::to_string( pou ) );
+            leaves.push_back( std::move( leaf ) );
+        }
+
+        size_t faces = 0;
+        for( const LeafRows& left : leaves )
+            for( const LeafRows& right : leaves )
+            {
+                if( left.info.patch != right.info.patch or
+                    std::abs( left.info.box[0][1] - right.info.box[0][0] ) > geom_tol )
+                    continue;
+                faces++;
+                std::set<size_t> fids;
+                for( const FunctionId& f : left.conn ) fids.insert( f.id() );
+                for( const FunctionId& f : right.conn ) fids.insert( f.id() );
+                for( const size_t f : fids )
+                {
+                    const size_t i = indexIn( left.conn, f );
+                    const size_t j = indexIn( right.conn, f );
+                    double jump = 0.0;
+                    for( Eigen::Index tb = 0; tb < nt; tb++ )
+                    {
+                        const double a =
+                            i < left.conn.size() ? left.rows( static_cast<Eigen::Index>( i ), ns - 1 + ns * tb ) : 0.0;
+                        const double b =
+                            j < right.conn.size() ? right.rows( static_cast<Eigen::Index>( j ), ns * tb ) : 0.0;
+                        jump = std::max( jump, std::abs( a - b ) );
+                    }
+                    if( jump <= coeff_tol ) continue;
+                    const auto& [level, fid] = v.level_of.at( f );
+                    problems.push_back( v.name + ": trace of " + describe( v, LevelFunction{ level, fid.id() } ) +
+                                        " jumps by " + std::to_string( jump ) + " from " + where( left.info ) + " to " +
+                                        where( right.info ) );
+                }
+            }
+        return faces;
+    }
+
+    struct Outcome
+    {
+        std::vector<size_t> h1_expected_per_level;
+        size_t h1_faces = 0;
+        std::vector<std::string> problems;
+    };
+
+    // Three levels on [0, 2] x [0, 1], degree (2, 2): s halved per level, t
+    // never refined.  Leaves are (level, patch, s element).
+    Outcome threeLevels( const std::vector<std::array<size_t, 3>>& requested )
+    {
+        const double ptol = 1e-10;
+        const KnotVector t( { 0, 0, 0, 1, 1, 1 }, ptol );
+        std::vector<std::shared_ptr<const MultiPatchSplineSpace>> levels;
+        Fixture fx;
+        for( size_t level = 0; level < 3; level++ )
+        {
+            const size_t n = size_t( 2 ) << level;
+            std::vector<double> bp;
+            for( size_t i = 0; i <= n; i++ ) bp.push_back( 2.0 * static_cast<double>( i ) / static_cast<double>( n ) );
+            std::vector<double> knots{ 0, 0 };
+            knots.insert( knots.end(), bp.begin(), bp.end() );
+            knots.insert( knots.end(), { 2, 2 } );
+            const auto patch = makePatch( { KnotVector( knots, ptol ), t }, { 2, 2 } );
+            levels.push_back( std::make_shared<const MultiPatchSplineSpace>(
+                buildH1MultiPatchSplineSpace( { patch, patch }, sMaxToSMin() ) ) );
+            fx.breakpoints.push_back( { bp, std::vector<double>{ 0, 1 } } );
+            fx.leaves.emplace_back();
+        }
+        for( const auto& [level, patch, s] : requested )
+            fx.leaves.at( level ).push_back( patchTopCellAt( levelCMap( *levels.at( level ) ), patch, { s, 0 } ) );
+
+        const HierarchicalMultiPatchSplineSpace h1 = buildHierarchicalSplineSpace( levels, fx.leaves );
+        const VectorConformingHierarchicalMultiPatchSplineSpace hdiv = buildHDivHierarchicalMultiPatchSplineSpace( h1 );
+        const VectorConformingHierarchicalMultiPatchSplineSpace hcurl =
+            buildHCurlHierarchicalMultiPatchSplineSpace( h1 );
+
+        Outcome out;
+        const auto activity = [&]( const HierarchyView& v ) {
+            INFO( v.name );
+            REQUIRE( v.levels.size() == 3 );
+            const std::set<LevelFunction> expected = expectedActive( v, fx, requestedLeaves( v, fx ) );
+            checkActivity( v, expected, out.problems );
+            return expected;
+        };
+        const HierarchyView h1_view = viewOf( "H1", h1 );
+        out.h1_expected_per_level.assign( 3, 0 );
+        for( const auto& [level, f] : activity( h1_view ) ) out.h1_expected_per_level.at( level )++;
+        out.h1_faces = checkH1Conformity( h1_view, fx, { 2, 2 }, out.problems );
+        activity( viewOf( "H(div)", hdiv ) );
+        activity( viewOf( "H(curl)", hcurl ) );
+        return out;
+    }
+}
+
+TEST_CASE( "Three levels, jump 2 at the interface only: THB activity and H1 conformity",
+           "[shared_interface_refinement]" )
+{
+    // Patch 0: level 1 on [0, 1.5], level 2 on [1.5, 2].  Patch 1: level 0.
+    const Outcome o =
+        threeLevels( { { 0, 1, 0 }, { 0, 1, 1 }, { 1, 0, 0 }, { 1, 0, 1 }, { 1, 0, 2 }, { 2, 0, 6 }, { 2, 0, 7 } } );
+    CHECK( o.h1_expected_per_level == std::vector<size_t>{ 12, 15, 3 } );
+    CHECK( o.h1_faces == 5 );
+    INFO( joined( o.problems ) );
+    CHECK( o.problems.empty() );
+}
+
+TEST_CASE( "Three levels, jump 2 inside a patch: THB activity and H1 conformity", "[shared_interface_refinement]" )
+{
+    // Patch 0: level 0 on [0, 1], level 2 on [1, 1.5], level 1 on [1.5, 2].
+    // Patch 1: level 0.  Jump 2 at s = 1 inside patch 0.
+    const Outcome o = threeLevels( { { 0, 0, 0 }, { 0, 1, 0 }, { 0, 1, 1 }, { 1, 0, 3 }, { 2, 0, 4 }, { 2, 0, 5 } } );
+    CHECK( o.h1_expected_per_level == std::vector<size_t>{ 21, 3, 0 } );
+    CHECK( o.h1_faces == 4 );
+    INFO( joined( o.problems ) );
+    CHECK( o.problems.empty() );
 }

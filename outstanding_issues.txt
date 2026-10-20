@@ -987,11 +987,14 @@ MEDIUM PRIORITY — Architectural / Correctness
    SEQUENCE (2026-10-20; supersedes ORDER above).
      1. Commit Step 10.  [DONE: cc62833]
      2. Pin which existing exception each current rejection reaches.
+        [DONE: b783841]
      3. Separate the mesh-structure diagnostic; remove only leaf equality.
+        [DONE: b783841]
      4. Algebraic correctness on Experiment A AND the tangentially refined
-        Phase 4a fixture.
+        Phase 4a fixture.  [DONE: b783841]
      5. The 3-level support-containment experiment; settle grading as a
-        separate policy.
+        separate policy.  [DONE with the fix, STEP 5 FIX; uncommitted,
+        awaiting review]
      6. Interface fragments and side embeddings; repair one-to-many
         enumeration.
      7. Off-node physical H1, H(div) and H(curl) trace tests.
@@ -1142,8 +1145,161 @@ MEDIUM PRIORITY — Architectural / Correctness
    when patches disagree, and the scalar helper should do the same.
    Limits: two levels, jump 1, two patches, 2D, patch 1 wholly coarse.
    (1), (2) and the hand values are fixture-specific.  No physical traces;
-   E3 still open.  Steps 3 and 4 must be committed together; record the
-   commit hash here afterwards.
+   E3 still open.  Steps 3 and 4 committed together: b783841.
+
+   HARDENING (2026-10-20).  CONTRACT CHANGE, made before step 5 relies on
+   it: scalar fidsToRefinementLevelFids now throws "A multi patch
+   hierarchical function maps to inconsistent refinement level functions."
+   when two patches give one hierarchical function different (level,
+   function) pairs, as vectorFidsToRefinementLevelFids already does.
+   Consistent inputs are unchanged.  MEASURED, probe swapping the first and
+   last entries of mFuncIds[1] in the constructor: unguarded, the helper is
+   silent and only the test's own lookup REQUIRE fails, twice; guarded,
+   both cases throw the new message.  Restored byte-identical; 8206
+   assertions and the full suite (221/221) green.  DEFENSIVE, not
+   certified: no permanent test reaches the refusal, and ARGUED-FROM-CODE
+   none can through public construction.  The only constructor derives
+   mFuncIds from activeFuncs, which numbers each shared level function once
+   from the global level set.  The probe is the only evidence.
+
+   STEP 5 RESULT (2026-10-20).  test/SharedInterfaceRefinement_test.cpp,
+   three new cases.  Three levels on [0,2] x [0,1] per patch, degree (2,2),
+   s halved per level (2, 4, 8 elements), t never refined, patch 0's s-max
+   glued to patch 1's s-min.  Checks.  H1, H(div), H(curl): the active
+   (level, function) pairs equal the full-support-containment oracle
+   (expectedActive, unchanged from step 4), injectively.  H1 only:
+   partition of unity on every leaf, and one trace per function across
+   every s-face inside a patch (the left leaf's last s-Bernstein column
+   against the right leaf's first; a function absent from a leaf is a zero
+   row).  Problems go into ONE aggregate assertion per case, as in Stage 1.
+     F1, jump 2 at the interface only.  Patch 0: level 1 on [0,1.5], level
+       2 on [1.5,2]; patch 1: level 0.  Leaf jumps inside patch 0 are <= 1.
+       MEASURED PASS.  Oracle H1 counts per level {12, 15, 3}, matching a
+       hand derivation; 5 faces, no jump.
+     F2, jump 2 inside patch 0.  Patch 0: level 0 on [0,1], level 2 on
+       [1,1.5], level 1 on [1.5,2]; patch 1: level 0.  A preconditions case
+       reaches every REQUIRE of the known-defect case and passes: oracle H1
+       counts {21, 3, 0}, matching a hand derivation; 4 faces.  The
+       known-defect case, MEASURED FAIL before tagging, and nothing else:
+         H1       extra: level 1, s-index 3, t-index 0..2
+         H(div)   extra: level 1, component 0, s-index 3, t-index 0..1
+         H(curl)  extra: level 1, component 1, s-index 3, t-index 0..1
+         H1       traces jump only at s = 1 (level-0 leaf | level-2 leaf):
+                  the extra functions by 0.5; level-0 s-index 1 by 0.125
+                  and s-index 2 by 0.375, each for t-index 0..2.
+       Nothing is missing.  This is E6, now MEASURED: N_3^1 has support
+       [0.5,2], which leaves Omega^1 = [1,2] at the level-0 leaf [0,1], but
+       no level-1 leaf face-touches that leaf, so the pruning keeps it.  In
+       each vector space only the component of s-degree 2 is affected.  The
+       level-0 jumps sum to 0.5 = N_3^1(1): truncation removes the N_3^1
+       share on the fine side, while the level-0 leaf keeps the
+       untruncated rows.  Partition of unity holds on every leaf, so only
+       the trace check exposes the defect.  Tagged
+       [known-defect][!shouldfail]: when pruning is fixed, remove the TAG
+       and keep the case.
+     Trace check not vacuous, MEASURED: with t-fastest Bernstein columns
+       F1 fails with 17 jumps on faces of both patches; restored
+       byte-identical.
+   GRADING.  Settled as a separate policy.  THB activity is support
+   containment and does not require grading; no grading code exists.
+   Conformity must not depend on grading.  One-level grading, if ever
+   wanted (conditioning, bounded overlap), is an explicit AMR refinement
+   policy that propagates marks before construction, never a precondition
+   that space construction checks or silently assumes.  F2 is to be fixed
+   by full support containment, not by forbidding it.
+   Limits: one refined direction; 2D; two patches; traces not checked
+   across the interface; vector spaces checked for activity only;
+   truncation not compared beyond partition of unity and traces.  The
+   single-patch HierarchicalTPSplineSpace loop has the same rule
+   (ARGUED-FROM-CODE) but is not exercised.  Not committed: commit with
+   the fix, never before it.  224/224 green includes an inverted
+   known-defect case, so it is characterization evidence, not completion.
+   REVIEW OF STEP 5 (2026-10-20).  Diagnosis accepted: F2 isolates a real
+   support-containment defect; F1 shows a jump of two is not invalid in
+   itself, so grading stays separate from correctness.  Decisions:
+     FIX.  Full support containment, at each level l:
+       1. seed candidates from the connectivity of exact level-l leaves
+          (support not wholly inside Omega^(l+1));
+       2. visit EVERY level-l cell covered by a coarser leaf, hence outside
+          Omega^l, and remove every function in its connectivity;
+       3. what remains has supp in Omega^l and not in Omega^(l+1).
+       Patch-local; no grading restriction.
+     HELPER.  One shared INTERNAL helper owning the whole candidate-and-
+       removal algorithm; callers keep only scalar/vector and local/global
+       bookkeeping.  A private header with a templated topology adapter;
+       never public merely to share it.  Partly addresses item 4.
+     ORDER.  Single-patch F2 for HierarchicalTPSplineSpace first, as a
+       known defect; then the helper in all three paths; then remove both
+       [known-defect] and [!shouldfail]; then bypass each caller's use of
+       the helper in turn and confirm its fixture fails.
+     COST.  The full-cell scan is the correct baseline, roughly
+       O(sum_l n_cells,l * n_local_dofs,l).  Profile it before automatic
+       AMR: globally refined background levels may make it expensive.
+       Correctness lands before optimization.
+     TESTS.  Move requestedLeaves above the step 4 and step 5 checks and
+       use it in both; confirm step 4 stays at 8206 assertions or record a
+       legitimate change.  Once F2 passes normally, merge its preconditions
+       and result cases: the duplicate run only guards a REQUIRE that
+       [!shouldfail] could hide.
+   STEP 5 FIX (2026-10-20).  CONTRACT CHANGE: the active functions of
+   HierarchicalTPSplineSpace, HierarchicalMultiPatchSplineSpace and
+   VectorConformingHierarchicalMultiPatchSplineSpace now follow full support
+   containment.  New src/basis/ThbActiveFunctions.hpp, included only by the
+   three .cpp files: basis::detail::levelActiveFunctions( cmap,
+   leaf_elements, level, level_ss ).  It seeds from the level-l leaves'
+   connectivity, descends every coarser leaf to level l with iterateChildren,
+   and erases the connectivity of each cell reached.  The template
+   parameters are the adapter: both hierarchical cmaps already provide
+   iterateChildren( level cell, level, callback ), so no dart conversion is
+   needed.  Callers keep only their bookkeeping; the three face-neighbour
+   loops are gone.
+     Why descent, not a dart-ancestor test per cell, ARGUED-FROM-CODE: a
+       dart strictly inside a coarse cell has no ancestor (checkForNoAncestor),
+       so such a test sees only cells on the coarse leaf's boundary.
+     What changes, ARGUED-FROM-CODE: the old loop erased only cells covered
+       by a coarser leaf, so new active sets are subsets of the old.  They
+       differ only when a candidate's support meets covered cells none of
+       which is face-adjacent to a level-l leaf; that needs a face, inside
+       the support, between a covered cell and a refined level-l cell, i.e.
+       a leaf-level jump of two or more there.  F1 has such a face, at the
+       interface, but no candidate's support crosses it.
+     Single-patch F2, MEASURED.  test/HierarchicalTPSplineSpace_test.cpp,
+       "Three levels, jump 2 inside a patch: THB active functions": the same
+       patch-0 layout on one patch, hand-derived active sets (level 0 s-index
+       0..2, level 1 s-index 4 and 5, level 2 none; 15 functions), one
+       aggregate CHECK.  Before the fix, untagged, it failed with exactly the
+       extra level-1 ids 3, 9, 15 (s-index 3, t-index 0..2), then was tagged
+       a known defect.  After the fix both F2 cases passed under
+       [!shouldfail]; the tags were removed.
+     Bypass probes, MEASURED: each caller in turn restored to its pre-fix
+       source, both binaries rebuilt and run, source restored byte-identical
+       (cmp), baseline rerun green:
+         TP     single-patch F2 fails, extras level 1 ids 3, 9, 15; the
+                multipatch binary stays green (it never reaches this path).
+         HMP    multipatch F2 fails for H1 only, extras level 1 s-index 3.
+         VCHMP  multipatch F2 fails for H(div) and H(curl) only.
+     Counts, MEASURED.  requestedLeaves now serves steps 4 and 5 (same
+       REQUIREs, same order); step 4 stays 3478 + 4728 = 8206.  F1 894,
+       unchanged.  The F2 cases are merged into one: 857 (854 REQUIREs, 3
+       CHECKs).  Each former F2 case lost 55 assertions under the fix; a
+       per-line histogram attributes them: 7 at invertPatchMap, one per
+       removed function (3 H1, 4 vector), and 48 at patchFunction, reached
+       only while describing problems.
+     Suite, MEASURED: 224/224, with no inverted case left (both [!shouldfail]
+       tags gone), so it is completion evidence for these fixtures.
+       Unchanged from before the fix: HierarchicalMultiPatchSplineSpace 54,
+       VectorConformingHierarchicalMultiPatchSplineSpace 387, Phase0 164,
+       TraceMesh 114 assertions.  HierarchicalTPSplineSpace_test 48 (47 + the
+       new case).  SharedInterfaceRefinement_test 9957 in 4 cases.
+     COST, ARGUED-FROM-CODE, not profiled: for each level l the descent
+       restarts from level 0, so it visits sum over m <= l of the level-m
+       cells covered by a coarser leaf, plus one connectivity call per
+       covered level-l cell.  Profile before automatic AMR (SEQUENCE 10).
+     Supersedes in STEP 5 RESULT: the known-defect tag and the
+       preconditions companion; "not exercised" for the single-patch loop
+       (now MEASURED); "Not committed" (commit step 5 with this fix).
+     Limits: 2D, one refined direction, jumps of two only; no 3D or
+       jump-three fixture.
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces
@@ -1248,6 +1404,13 @@ LOW PRIORITY — Maintenance / Cleanup
    File(s): src/basis/HierarchicalMultiPatchSplineSpace.cpp  (activeFuncs)
             src/basis/VectorConformingHierarchicalMultiPatchSplineSpace.cpp
             (vectorActiveFuncs)
+            src/basis/HierarchicalTPSplineSpace.cpp  (activeFuncs)
+
+   Status (2026-10-20): RESOLVED for the pruning by item 1 STEP 5 FIX.  There
+   were three copies, not two: HierarchicalTPSplineSpace had the same loop.
+   All three now call basis::detail::levelActiveFunctions
+   (src/basis/ThbActiveFunctions.hpp).  The per-caller bookkeeping that
+   follows it stays separate by design.
 
    The topology-driven leaf/prune logic is nearly identical in both functions,
    differing only in the type of level_ss. A template or shared helper could

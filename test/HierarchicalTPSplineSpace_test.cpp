@@ -280,3 +280,35 @@ TEST_CASE( "Simple 3d hierarchical spline space 2" )
         io::outputSimplicialFieldToVTK( out, "control_points.vtu" );
     }
 }
+
+// Item 1, step 5 (outstanding_issues.txt): a leaf-level jump of two inside one patch.
+TEST_CASE( "Three levels, jump 2 inside a patch: THB active functions" )
+{
+    // s in [0,2] halved per level, t in [0,1] fixed, degree 2.  Leaves: L0 [0,1], L1 [1.5,2],
+    // L2 [1,1.25] and [1.25,1.5]; so Omega^1 = [1,2] and Omega^2 = [1,1.5].
+    const KnotVector kv_t( { 0, 0, 0, 1, 1, 1 }, 1e-10 );
+    const std::vector<std::vector<size_t>> leaf_s = { { 0 }, { 3 }, { 4, 5 } };
+    std::vector<std::shared_ptr<const TPSplineSpace>> levels;
+    std::vector<std::vector<Cell>> leaves( leaf_s.size() );
+    for( size_t level = 0; level < leaf_s.size(); level++ )
+    {
+        const size_t n = 2 << level;
+        std::vector<double> knots = { 0, 0 };
+        for( size_t i = 0; i <= n; i++ ) knots.push_back( 2.0 * i / n );
+        knots.insert( knots.end(), { 2, 2 } );
+        levels.push_back(
+            std::make_shared<const TPSplineSpace>( buildBSpline( { KnotVector( knots, 1e-10 ), kv_t }, { 2, 2 } ) ) );
+        const TPCombinatorialMap& level_cmap = levels.back()->basisComplex().parametricAtlas().cmap();
+        for( const size_t s : leaf_s.at( level ) )
+            leaves.at( level ).emplace_back(
+                flattenFull( level_cmap, FullyUnflattenedDart( { Dart( s ), Dart( 0 ) } ) ), 2 );
+    }
+    const HierarchicalTPSplineSpace ss = buildHierarchicalSplineSpace( levels, leaves );
+
+    // Level function id s + n_s * t.  Active iff supp in Omega^l and not in Omega^(l+1):
+    // L0 s = 0, 1, 2 (s = 3 has supp [1,2]); L1 s = 4, 5 (s = 3 has supp [0.5,2]); none on L2.
+    const std::vector<std::vector<size_t>> expected = { { 0, 1, 2, 4, 5, 6, 8, 9, 10 }, { 4, 5, 10, 11, 16, 17 }, {} };
+    std::vector<std::vector<size_t>> active;
+    for( const auto& level_funcs : ss.activeFunctions() ) active.emplace_back( level_funcs.begin(), level_funcs.end() );
+    CHECK( active == expected );
+}

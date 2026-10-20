@@ -1,6 +1,7 @@
 #include <HierarchicalMultiPatchSplineSpace.hpp>
 #include <set>
 #include <CombinatorialMapMethods.hpp>
+#include <ThbActiveFunctions.hpp>
 
 using namespace basis;
 
@@ -27,42 +28,8 @@ ActiveFuncs activeFuncs( const topology::HierarchicalMultiPatchCombinatorialMap&
     for( size_t level_ii = 0; level_ii < refinement_levels.size(); level_ii++ )
     {
         const auto& level_ss = refinement_levels.at( level_ii );
-        const auto& level_cmap = *cmap.refinementLevels().at( level_ii );
-        std::set<topology::Cell> cells_to_prune;
-        std::set<FunctionId> level_active_funcs;
-        for( const topology::Cell& leaf_elem : leaf_elements.at( level_ii ) )
-        {
-            const std::vector<FunctionId> conn = level_ss->connectivity( leaf_elem );
-            level_active_funcs.insert( conn.begin(), conn.end() );
-            iterateAdjacentCells( level_cmap, leaf_elem, cmap.dim() - 1, [&]( const topology::Cell& c ) {
-                const auto maybe_phi = phi( level_cmap, cmap.dim(), c.dart() );
-                if( maybe_phi )
-                {
-                    bool ancestor_leaf = false;
-                    iterateDartsOfCell( level_cmap, topology::Cell( maybe_phi.value(), cmap.dim() ),[&]( const topology::Dart& d ) {
-                        cmap.iterateAncestors( cmap.toGlobalDart( level_ii, d ), [&]( const topology::Dart& ancestor ) {
-                            if( cmap.isUnrefinedLeafDart( ancestor ) )
-                            {
-                                ancestor_leaf = true;
-                            }
-                            return not ancestor_leaf;
-                        } );
-                        return not ancestor_leaf;
-                    } );
-                    if( ancestor_leaf )
-                    {
-                        cells_to_prune.insert( topology::Cell( maybe_phi.value(), cmap.dim() ) );
-                    }
-                }
-                return true;
-            } );
-        }
-
-        for( const topology::Cell& prune_cell : cells_to_prune )
-        {
-            const std::vector<FunctionId> conn = level_ss->connectivity( prune_cell );
-            for( const FunctionId& fid : conn ) level_active_funcs.erase( fid );
-        }
+        const std::set<FunctionId> level_active_funcs =
+            detail::levelActiveFunctions( cmap, leaf_elements, level_ii, *level_ss );
 
         for( size_t patch_ii = 0; patch_ii < level_ss->subSpaces().size(); patch_ii++ )
         {
@@ -197,7 +164,11 @@ namespace basis
                 for( const FunctionId& tp_fid : tp_active_funcs.at( level_ii ) )
                 {
                     const FunctionId mp_fid = tp_to_mp.at( constituent_ii ).at( tp_fid.id() );
-                    out.at( tph_to_mph.at( constituent_ii ).at( tph_fid.id() ) ) = { level_ii, mp_fid };
+                    auto& entry = out.at( tph_to_mph.at( constituent_ii ).at( tph_fid.id() ) );
+                    if( entry.first != std::numeric_limits<size_t>::max() and
+                        ( entry.first != level_ii or entry.second.id() != mp_fid.id() ) )
+                        throw std::runtime_error( "A multi patch hierarchical function maps to inconsistent refinement level functions." );
+                    entry = { level_ii, mp_fid };
                     tph_fid = tph_fid.id() + 1;
                 }
             }
