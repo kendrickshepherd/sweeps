@@ -1,5 +1,7 @@
 #include <VectorConformingMultiPatchSplineSpace.hpp>
 #include <CombinatorialMapMethods.hpp>
+#include <MultiPatchCombinatorialMap.hpp>
+#include <SideCoordinateTransform.hpp>
 #include <MultiPatchSplineSpace.hpp>
 #include <GlobalCellMarker.hpp>
 #include <ranges>
@@ -102,8 +104,17 @@ util::UnionFind unitedFunctions( const std::vector<std::shared_ptr<const VectorC
                     constexpr bool reverse = true; // Because phi3 reverses orientation across the face.
 
                     const auto& other_constituent = *constituents.at( other_patch_ii );
-                    /// Here we need to find which vector component corresponds to the vector component from the other patch.
-                    const auto [other_vec_comp, aligned] = coordinateTransform( atlas, glob_corner_cell ).at( vec_comp );
+                    // Which far-patch component this one corresponds to, and whether the two
+                    // run in the same direction.  Read from the stored interface data rather
+                    // than from phi-connected frames; see outstanding_mathematics.txt M5.
+                    const topology::PatchSideInterface iface =
+                        topology::interfaceAtDart( multi_cmap, glob_corner_cell.dart() );
+                    const auto [other_vec_comp, aligned] =
+                        topology::interfaceCoordinateTransform( multi_cmap.dim(),
+                                                                iface.source.side_id,
+                                                                iface.destination.side_id,
+                                                                iface.permutation )
+                            .at( vec_comp );
 
                     size_t other_component_offset = 0;
                     for( size_t i = 0; i < other_vec_comp; i++ )

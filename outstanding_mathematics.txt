@@ -535,12 +535,20 @@ M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
             (STEP 8, 2026-10-07), the tangential one from the phi-free
             sideCoordinateTransform and the normal one from getFrame's inward
             corner.  find_change's well-definedness is SUPPLIED by STEP 9
-            (2026-10-07).  What remains open is the dependence on phi, which no
-            comparison of this kind can reach, and the det J = +1 orientation
+            (2026-10-07).  STEP 10 (2026-10-07) does not discharge the phi
+            dependence of THIS function but removes production's reliance on
+            it: the vector merge's component and orientation calculation now
+            goes through the phi-free interfaceCoordinateTransform, measured
+            identical to this one on all 160 interface classes.  What remains
+            open is the dependence on phi, which no comparison of this kind can
+            reach, and the det J = +1 orientation
             argument, exhaustively verified but not proved - the agreement of
             the two normal derivations is ALGEBRAICALLY EQUIVALENT to det J,
             so it is not an independent cross-check of it.
-  SITE      src/param/ParametricAtlas.cpp:94-160 (getFrame, coordinateTransform).
+  SITE      src/param/ParametricAtlas.cpp:94-160 (getFrame, coordinateTransform)
+            PRESERVED unchanged by STEP 10, but no longer on the de Rham sign
+            path: its remaining production consumer is getIterVars' face branch
+            at src/basis/MultiPatchSplineSpace.cpp:168.
   CLAIM     It derives the component map and sign from getFrame on both sides by
             comparing actual parent-point coordinate changes, never reading the
             permutation enum, so it is correct by construction and is not
@@ -582,14 +590,25 @@ M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
             not be read as independence from this function.  Same tautology as
             the onSameVertex CAUTION, one level up.  PARTIALLY ANSWERED by the
             comparison above, which is phi-free on one side - for the tangential
-            block only.
-            (b) find_change returns the FIRST coordinate differing by more than
-            1e-10 and throws if none does.  Well-definedness requires exactly
-            one coordinate to differ between a frame corner and the frame
-            origin.  CLOSED BY STEP 9 (2026-10-07) over every frame in the
-            tested two-patch tensor-product configurations, which are those the
-            current API can express; see STEP 9 below for what that sweep covers
-            and what it does not.
+            block only.  NO LONGER LOAD-BEARING FOR THE DE RHAM MERGE after
+            STEP 10, which routes that merge through a function with no phi in
+            it; the soft spot stands against this function, which is preserved.
+            (b) THE FRAME-AXIS INVARIANT.  find_change returns the FIRST
+            coordinate differing by more than 1e-10 and throws if none does.
+            Well-definedness requires exactly one coordinate to differ between a
+            frame corner and the frame origin.  CLOSED BY STEP 9 (2026-10-07)
+            over every frame in the tested two-patch tensor-product
+            configurations, which are those the current API can express; see
+            STEP 9 below for what that sweep covers and what it does not.
+            THE GATE SURVIVES STEP 10 on a consumer other than this one.  The
+            invariant is a property of getFrame, and getIterVars' face branch
+            (MultiPatchSplineSpace.cpp:168) depends on it too: it assigns the
+            two face directions by matching frame corners 1 and 2 against
+            parent-axis groups, and double-writes or leaves unwritten an entry
+            of `order` if the two corners move along the same group.  That
+            consumer, not coordinateTransform, is now what keeps the gate
+            load-bearing, and the gate is named after the invariant rather than
+            after find_change for that reason.
             True for axis-aligned tensor-product parent domains, which remains
             the hypothesis rather than a theorem.  find_change is still silent
             (first wins) rather than diagnostic if two coordinates differ; the
@@ -639,6 +658,15 @@ M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
             neither comparison makes it an oracle FOR phi, and "phi is the
             independent oracle" must still not be read as independence from
             this function.
+            REDUCED, NOT CLOSED, BY STEP 10, and the reduction is narrower than
+            it sounds.  What step 10 removes is the ANSWER's dependence: which
+            far component pairs with this one, and with which sign, is now
+            computed from the stored interface data alone.  What it does NOT
+            remove is phi from the merge - the merge still calls phi to decide a
+            face is glued and to obtain the neighbouring patch and local dart,
+            and the adapter calls constituent-local phi to prove the face is on
+            the patch boundary.  So item (iii) is closed for the de Rham SIGN
+            CONVENTION and open for coordinateTransform itself.
             (iv) det J = +1 FOR EVERY REACHABLE GLUING, verified by enumeration
             in step 8 but not proved.  Math and documentation work, not code.
             ENOUGH WOULD BE a short orientation argument: that the dart-pair
@@ -770,19 +798,28 @@ M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
     proved, per item (iv).
 
 
-  STEP 9, the find_change property gate.  MEASURED (2026-10-07).
+  STEP 9, the frame-axis invariant gate.  MEASURED (2026-10-07).
   SITE test/RowD_Diagnostics_test.cpp, the STEP 9 test case.
 
-    WHAT IS ASSERTED.  find_change takes the first coordinate differing from
-    the frame origin by more than 1e-10 and throws if none does, so
-    coordinateTransform is well defined only when each frame corner differs
-    from the origin in EXACTLY ONE coordinate.  The gate observes every frame
-    in the tested two-patch tensor-product configurations - the near one
-    unreversed and the far one with reverse_dart, the pair coordinateTransform
-    itself builds - and asserts, per group: no corner changes other than
-    exactly one coordinate, no two corners of one frame change the SAME axis,
-    no changing coordinate moves less than 1e-6, and no unchanging coordinate
-    moves at all.
+    WHAT IS ASSERTED.  THE FRAME-AXIS INVARIANT: each corner getFrame returns
+    differs from the frame origin in EXACTLY ONE coordinate, and distinct
+    corners differ in DISTINCT coordinates.  It is stated as a property of
+    getFrame rather than of any one caller because it has two production
+    consumers that both silently depend on it - find_change inside
+    coordinateTransform, which takes the FIRST coordinate differing by more
+    than 1e-10 and throws if none does, and getIterVars' face branch at
+    MultiPatchSplineSpace.cpp:168, which matches frame corners 1 and 2 against
+    parent-axis groups to assign the two face directions.  The gate observes
+    every frame in the tested two-patch tensor-product configurations - the
+    near one unreversed and the far one with reverse_dart, the pair
+    coordinateTransform builds together and getIterVars builds one at a time -
+    and asserts, per group: no corner changes other than exactly one
+    coordinate, no two corners of one frame change the SAME axis, no changing
+    coordinate moves less than 1e-6, and no unchanging coordinate moves at all.
+      RENAMED 2026-10-07 by STEP 10, which took the vector merge off
+      coordinateTransform.  The gate was described as support for that one
+      function; it is named after the invariant now, and getIterVars is what
+      keeps it load-bearing.
 
     MEASURED over six groups, 19888 frames and 59552 corners:
       3d, one element         1152 frames  the 144 classes, 4 darts per face
@@ -797,8 +834,10 @@ M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
 
     THE SECOND PROPERTY IS THE STRONGER ONE.  Exactly-one-changing is what
     makes find_change WELL DEFINED; dim corners changing dim DISTINCT axes is
-    what makes coordinateTransform's map TOTAL, every entry written exactly
-    once.  Step 8 measured that as a consequence; this measures it as the cause.
+    what makes both consumers TOTAL - coordinateTransform writes every entry of
+    its transform exactly once, and getIterVars assigns each face direction
+    exactly once instead of double-writing or skipping an entry of `order`.
+    Step 8 measured that as a consequence; this measures it as the cause.
 
     THE TOLERANCE IS NOT LOAD-BEARING, and that is now measured rather than
     assumed.  Parent coordinates are per-element, so a changing coordinate
@@ -827,7 +866,7 @@ M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
     the dart-pair constructor's identification does reverse that orientation.
     That premise is a property of phi_3's construction, asserted in production
     at exactly one place - the constexpr bool reverse = true at
-    src/basis/VectorConformingMultiPatchSplineSpace.cpp:102, whose comment
+    src/basis/VectorConformingMultiPatchSplineSpace.cpp:104, whose comment
     states it without argument - and is therefore ARGUED-FROM-CODE.
       SO ITEM (iv) IS NO LONGER INDEPENDENT.  It now rests on a single
       combinatorial fact about the inter-patch phi_3, which is the kind of
@@ -843,11 +882,155 @@ M5. coordinateTransform IS "CORRECT BY CONSTRUCTION"
     "axis-aligned tensor-product parent domains" remains the hypothesis under
     which the property is expected to hold, and nothing measured here would
     survive a non-tensor-product parent cell.  Three or more patches are
-    outside it, as is non-conforming refinement across an interface - the
+    outside THIS SWEEP, which builds two-patch configurations only; fixtures
+    elsewhere do exercise three- and four-patch topologies, and STEP 10 walks
+    the cyclic and reversing ones.  Also outside it is non-conforming
+    refinement across an interface - the
     latter because the dart-pair constructor ACCEPTS non-conforming gluings and
     then yields invalid darts, a validation gap found while building this gate
     and recorded as outstanding_issues.txt item 15.  No conforming gluing is
     affected by it.
+
+  STEP 10, the phi-free interface transform in production.  DERIVED AND
+  MEASURED (2026-10-07).
+  SITE src/topology/SideCoordinateTransform.cpp:143,156 (tangentialAxes,
+    interfaceCoordinateTransform); src/topology/MultiPatchCombinatorialMap.cpp
+    :210 (addConnection), :262 (interfaceAtDart);
+    src/basis/VectorConformingMultiPatchSplineSpace.cpp:110-116 (the switched
+    call site).
+
+    WHAT CHANGED.  The vector merge's component correspondence and orientation
+    no longer come from getFrame through phi.  They come from
+    interfaceCoordinateTransform, which computes the full signed parent-axis
+    permutation from (dim, source side, destination side, stored permutation)
+    and calls neither phi nor getFrame.  Its tangential block IS
+    sideCoordinateTransform; its normal block is step 8's parity rule, aligned
+    iff the two side ids have different parity.  Both blocks were derived
+    before this step and are only moved into production code by it.
+
+    HOW MUCH phi DEPENDENCE IS REMOVED - PRECISELY, because the loose version
+    of this claim is false.  Only the component and orientation calculation.
+    The merge still calls phi( multi_cmap, 3, . ) to decide a face is glued at
+    all and to obtain the neighbouring patch and its local dart, and
+    interfaceAtDart calls constituent-local phi to prove the face is on the
+    patch boundary.  What no longer passes through phi is the ANSWER: which far
+    component pairs with this one, and with which sign.
+
+    THE VALIDATED ADAPTER, AND WHY THE ORDER OF ITS CHECKS MATTERS.
+    whichBoundary keys off d.id() % 24 in 3d, which is an ELEMENT-local face
+    direction.  An interior face of a refined patch has such a direction just
+    as a boundary face does, and whichBoundary does NOT throw on it.  So a
+    lookup going straight from dart to side id would hand an interior face
+    whatever connection is registered on the EXTERIOR side of the same
+    direction - a silently wrong answer, not an error.  interfaceAtDart
+    therefore tests constituent-local phi( patch, dim, local_dart ) FIRST and
+    refuses an interior face by name, then derives the side id, then looks up
+    the connection, then checks the partner names this side back by the same
+    permutation.  Three distinct throws: interior face, unglued exterior side,
+    inconsistent stored connectivity.  THE HAZARD IS MEASURED, NOT
+    HYPOTHESISED: the gate in MultiPatchCombinatorialMap_test.cpp glues BOTH
+    sides normal to a refined patch's first axis, so EVERY interior face of that
+    patch shares its element-local direction with a glued side, and requires all
+    of them to be refused.
+
+    ONE PARTNER PER PATCH SIDE, a prerequisite and not a consequence.  The
+    dart-pair constructor used map::emplace, which keeps the FIRST insertion and
+    silently drops a second partner for the same side.  That hazard is NOT new
+    to this step - the existing phi implementation also reads the stored
+    connection map, so a dropped insertion already affected topology adjacency.
+    addConnection now accepts a restatement of the same gluing and REJECTS a
+    second, different partner.  RETRACTED (review, 2026-10-16): this section
+    previously claimed the direct InternalConnectionsMap constructor needed no
+    change because std::map keys make one partner per side structural there.
+    That is false.  A map key fixes only one partner per SOURCE side; it does
+    not rule out A -> B alongside C -> B, a missing reverse entry, or a reverse
+    entry naming a different permutation.  The direct constructor now runs
+    validateMultiPatchStructure, which requires every connection to be named
+    back by the same permutation from the other end.  Reciprocity is what makes
+    the invariant structural, and it subsumes unique INCOMING partners: if both
+    A and C named B, the single entry for B could name back only one of them,
+    so the other is refused.  The same pass rejects out-of-range patch ids, a
+    side glued to itself, and - by delegating to sideCoordinateTransform, the
+    single authority - an out-of-range side id or a permutation that does not
+    match the dimension.  The derived path passes it trivially, because
+    addConnection already writes both directions with one permutation.
+
+    CONSTITUENT SHAPE, checked whole and shared by BOTH public constructors
+    (review, 2026-10-16).  validateConstituents refuses an empty list, a null
+    patch, and any patch whose dimension differs from the first.  Before it,
+    the two paths had different contracts: the dart-pair path refused zero
+    patches and the direct path accepted them.  Dimension has to be checked
+    across the list, not per connection, because dim() reports only the first
+    patch's - a 2d and a 3d patch never glued to each other passed.  The
+    per-connection dimension check is retained but is now UNREACHABLE from
+    either constructor; it is defence against relaxing the whole-list rule,
+    and no test reaches it.
+    ORDERING IS LOAD-BEARING.  initializeRanges dereferences every patch, and
+    it runs in the member-initializer list, so a check in the constructor BODY
+    would come after a null dereference.  Validation therefore runs in the
+    FIRST member's initializer, and the dart-pair path calls the shape check
+    before initializeInterMapConnections dereferences the patches its dart
+    pairs name.
+    DISTINCT FROM ISSUE 15, which is about matching element and interface
+    extents before multipatch AMR admits independently refined interfaces.
+
+    MEASURED.
+      input validation and inverse composition, all 16 2d and 144 3d classes:
+        test/Stage1_InterfaceTransform_test.cpp, 3163 assertions / 22 cases.
+        The 16 hand-pinned 2d expectations were written against the FRAME
+        implementation before this helper existed, and reproduce exactly.
+        Connections are stored symmetrically with the same permutation both
+        ways, so the two directions must be mutual inverses; they compose to
+        the identity on all 160 classes, signs included, which means a lookup
+        from either end of an interface agrees.
+      THE DIFFERENTIAL, old against new, over 1184 interface darts in all 160
+        classes: axis disagreements ZERO, sign disagreements ZERO, adapter
+        throws ZERO, source-patch mismatches ZERO.  Run BEFORE the switch, so
+        the switch is a substitution between two measured-identical functions
+        rather than a change of answer.  Unlike step 8, which compared
+        coordinateTransform against a formula restated in the test file, this
+        compares the two PRODUCTION call paths end to end, adapter included, so
+        a wrong side lookup cannot hide behind a right formula.
+      MALFORMED-MAP REFUSAL, test/MultiPatchCombinatorialMap_test.cpp, 142
+        assertions / 6 cases.  A well-formed reciprocal map is accepted, and
+        eight malformed connections are refused, each pinned by its MESSAGE -
+        the common prefix, the offending source and destination written out by
+        hand, and a reason substring - not merely by exception type: missing
+        reverse entry, A -> B with C -> B, mismatched reverse permutation,
+        reverse entry naming a different side, out-of-range patch id,
+        out-of-range side id, Flip1d in 3d, a side glued to itself.  Shape
+        refusals are pinned through BOTH constructors with no connections, so
+        nothing per-connection can be what refuses them: zero patches, a null
+        patch first or later, and two disconnected mixed-dimension lists.
+        MUTATION-CHECKED: rendering the offender as to -> from and replacing
+        one reason with a generic message failed exactly the expected 7 of the
+        8 connection refusals - all but the self-glued one, where from and to
+        coincide.  Restored byte-identical before the gates below.
+      ADAPTER TOTALITY on the faces the merge actually enumerates, over the
+        four- and three-patch cyclic and reversing fixtures plus a single patch
+        glued to itself: 90 corner-cell faces, 38 glued of which 2 SELF-glued,
+        adapter throws ZERO, disagreements ZERO.  The self-glued case is the
+        one where source and destination name the same constituent, which no
+        multi-patch fixture reaches and which the merge must still handle.
+        Totality is the one failure mode the switch introduces -
+        interfaceAtDart throws where coordinateTransform returned an answer -
+        and no agreement check would have caught it, because agreement is only
+        testable where both return.
+      Full suite 218/218 after the shape validation landed (one new case), so
+      the switch changed no answer in production.  Re-measured on the final
+      source: MultiPatchCombinatorialMap 142/6, Stage1 3163/22, RowD 10959/13.
+
+    WHAT STEP 10 DOES NOT ESTABLISH.  Both functions are functions of the
+    interface CLASS alone, so a two-patch sweep exhausts their INPUTS; the merge
+    that consumes them walks phi, and that walk is covered only by fixtures.
+    The accurate statement of the limit is that interface-class coverage is
+    exhaustive while multipatch cyclic topology coverage remains fixture-based.
+    Nor is the generic frame-based coordinateTransform retired: it is PRESERVED
+    unchanged, still accepts any ParametricAtlas, still describes same-patch
+    interior faces - which interfaceAtDart deliberately refuses - and still
+    serves HierarchicalMultiPatchParametricAtlas, which does not derive from
+    MultiPatchParametricAtlas.  Narrowing or moving it would be an API and
+    behaviour change, and is a separate decision from this step.
 
 
 -------------------------------------------------------------------------------

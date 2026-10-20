@@ -15,18 +15,6 @@ namespace basis
     {
         using TPPermutation = topology::MultiPatchCombinatorialMap::TPPermutation;
 
-        std::vector<size_t> tangentialAxes( const size_t dim, const size_t side_id )
-        {
-            const size_t normal_axis = side_id / 2;
-            if( normal_axis >= dim ) throw std::invalid_argument( "Patch interface side is outside the patch dimension." );
-
-            std::vector<size_t> axes;
-            axes.reserve( dim - 1 );
-            for( size_t axis = 0; axis < dim; axis++ )
-                if( axis != normal_axis ) axes.push_back( axis );
-            return axes;
-        }
-
         bool approximatelyEqual( const double first, const double second )
         {
             constexpr double relative_tol = 1e-10;
@@ -83,8 +71,8 @@ namespace basis
                 if( first_components.size() != dim or second_components.size() != dim )
                     throw std::invalid_argument( "Multipatch interface constituents must be tensor-product splines." );
 
-                const std::vector<size_t> first_axes = tangentialAxes( dim, first_side.side_id );
-                const std::vector<size_t> second_axes = tangentialAxes( dim, second_side.side_id );
+                const std::vector<size_t> first_axes = topology::tangentialAxes( dim, first_side.side_id );
+                const std::vector<size_t> second_axes = topology::tangentialAxes( dim, second_side.side_id );
                 const topology::SideCoordinateTransform transform = topology::sideCoordinateTransform(
                     dim, first_side.side_id, second_side.side_id, permutation );
 

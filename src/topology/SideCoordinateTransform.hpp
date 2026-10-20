@@ -1,6 +1,7 @@
 #pragma once
 #include <MultiPatchCombinatorialMap.hpp>
 #include <SmallVector.hpp>
+#include <utility>
 #include <vector>
 
 namespace topology
@@ -36,4 +37,20 @@ namespace topology
     // Side coordinates on the unit square; a reversed axis becomes 1 - x.
     std::vector<double> transformSidePoint( const SideCoordinateTransform& transform,
                                             const std::vector<double>& source_point );
+
+    // The parent axes tangential to a side, in increasing order.  The side's
+    // normal axis is side_id / 2.
+    std::vector<size_t> tangentialAxes( size_t dim, size_t side_id );
+
+    // The full-dimensional parent-axis correspondence across a glued side pair,
+    // indexed by SOURCE axis: entry s holds the destination axis that source
+    // axis s maps to, and whether the two run in the same direction.  Derived
+    // from the stored interface data alone - no phi, no frames.  The tangential
+    // block is sideCoordinateTransform; the normal block is derived in
+    // outstanding_mathematics.txt M5.
+    SmallVector<std::pair<size_t, bool>, 3> interfaceCoordinateTransform(
+        size_t dim,
+        size_t source_side_id,
+        size_t destination_side_id,
+        MultiPatchCombinatorialMap::TPPermutation permutation );
 }

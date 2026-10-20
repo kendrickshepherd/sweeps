@@ -140,6 +140,47 @@ namespace topology
         return out;
     }
 
+    std::vector<size_t> tangentialAxes( const size_t dim, const size_t side_id )
+    {
+        const size_t normal_axis = side_id / 2;
+        if( normal_axis >= dim )
+            throw std::invalid_argument( "Patch interface side is outside the patch dimension." );
+
+        std::vector<size_t> axes;
+        axes.reserve( dim - 1 );
+        for( size_t axis = 0; axis < dim; axis++ )
+            if( axis != normal_axis ) axes.push_back( axis );
+        return axes;
+    }
+
+    SmallVector<std::pair<size_t, bool>, 3> interfaceCoordinateTransform( const size_t dim,
+                                                                          const size_t source_side_id,
+                                                                          const size_t destination_side_id,
+                                                                          const TPPermutation permutation )
+    {
+        // Validates dim, both side ids, and the permutation against dim.
+        const SideCoordinateTransform side =
+            sideCoordinateTransform( dim, source_side_id, destination_side_id, permutation );
+        const std::vector<size_t> source_axes = tangentialAxes( dim, source_side_id );
+        const std::vector<size_t> destination_axes = tangentialAxes( dim, destination_side_id );
+
+        SmallVector<std::pair<size_t, bool>, 3> out( dim, { 0, false } );
+        for( size_t d = 0; d + 1 < dim; d++ )
+        {
+            const size_t s = side.source_axis_for_destination.at( d );
+            out.at( source_axes.at( s ) ) = { destination_axes.at( d ),
+                                              not side.source_axis_reversed.at( d ) };
+        }
+
+        // Each side's inward normal is +e_n exactly on the lower side of an
+        // axis, and the S1,S0,T1,T0,U1,U0 ordering makes lower an odd side id,
+        // so going from outward-source to inward-destination carries one extra
+        // flip relative to the tangential block.
+        out.at( source_side_id / 2 ) = { destination_side_id / 2,
+                                        ( source_side_id % 2 ) != ( destination_side_id % 2 ) };
+        return out;
+    }
+
     std::vector<double> transformSidePoint( const SideCoordinateTransform& transform,
                                             const std::vector<double>& source_point )
     {

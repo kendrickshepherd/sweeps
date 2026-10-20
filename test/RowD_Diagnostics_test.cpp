@@ -1743,13 +1743,25 @@ TEST_CASE( "STEP 8: the step 6 and 7 interface sign rules over all 3d gluing cla
 
 namespace
 {
-    // STEP 9 (M5 item ii, soft spot b).  find_change returns the FIRST
-    // coordinate differing from the frame origin by more than 1e-10 and throws
-    // if none does, so coordinateTransform is well defined only when each
-    // frame corner differs from the origin in EXACTLY ONE coordinate.  The
-    // MARGIN is measured too: a property holding only barely above the
-    // tolerance would be fragile rather than true, and find_change is silent
-    // rather than diagnostic if two coordinates differ.
+    // STEP 9 (M5 item ii, soft spot b).  THE FRAME-AXIS INVARIANT: each corner
+    // getFrame returns differs from the frame origin in EXACTLY ONE coordinate,
+    // and distinct corners differ in DISTINCT coordinates.  This is a property
+    // of getFrame, stated without reference to any one caller, because it has
+    // two production consumers that both silently depend on it:
+    //
+    //   find_change, inside coordinateTransform (ParametricAtlas.cpp:126), takes
+    //   the FIRST coordinate differing by more than 1e-10 and throws if none
+    //   does - so it is silent rather than diagnostic when two differ;
+    //
+    //   getIterVars' face branch (MultiPatchSplineSpace.cpp:168) assigns the two
+    //   face directions by matching frame corners 1 and 2 against parent-axis
+    //   groups, which double-writes or leaves unwritten an entry of `order` if
+    //   the two corners move along the same group.
+    //
+    // STEP 10 switched the vector merge off coordinateTransform, so the second
+    // consumer is now what keeps this gate load-bearing.  The MARGIN is measured
+    // too: a property holding only barely above the tolerance would be fragile
+    // rather than true.
     struct FrameObs
     {
         size_t n_frames = 0;
@@ -1787,8 +1799,9 @@ namespace
         }
     }
 
-    // The two frames coordinateTransform itself builds for one cell: the near
-    // one unreversed, the far one across phi_dim with reverse_dart.
+    // The frame pair for one cell: the near one unreversed, the far one across
+    // phi_dim with reverse_dart.  coordinateTransform builds both together;
+    // getIterVars builds the same two, one per call from the merge loop.
     void observeCellFrames( const param::ParametricAtlas& atlas,
                                  const topology::Cell& cell,
                                  const size_t dim,
@@ -1805,7 +1818,7 @@ namespace
     }
 }
 
-TEST_CASE( "STEP 9: find_change is well defined on every frame in the tested two-patch tensor-product configurations", "[rowd]" )
+TEST_CASE( "STEP 9: getFrame's corners move along distinct single axes, in the tested two-patch tensor-product configurations", "[rowd]" )
 {
     const KnotVector kv( { 0, 0, 0, 1, 1, 1 }, ptol );
     const auto cmap_1d = std::make_shared<const CombinatorialMap1d>( numElements( kv ) );
@@ -1816,8 +1829,8 @@ TEST_CASE( "STEP 9: find_change is well defined on every frame in the tested two
     const auto param_3d = std::make_shared<const param::TPParametricAtlas>( cmap_3d, param_2d, param_1d );
 
     // 3d, over the same exhaustion of the 144 interface classes as step 8, and
-    // over all four darts of each interface face, because production calls
-    // coordinateTransform once per dart.
+    // over all four darts of each interface face, because both consumers
+    // rebuild the frame once per dart.
     FrameObs o3;
     size_t n_built = 0, n_rejected = 0;
     const auto classes = gluingClasses3d( n_built, n_rejected );
@@ -1954,8 +1967,9 @@ TEST_CASE( "STEP 9: find_change is well defined on every frame in the tested two
         CHECK( o.n_not_exactly_one == 0 );
 
         // Each corner changes a DIFFERENT axis, so the dim corners span the dim
-        // axes and coordinateTransform writes every entry exactly once.  Step 8
-        // measured the consequence; this measures the cause.
+        // axes: coordinateTransform then writes every entry of its transform
+        // exactly once, and getIterVars assigns each face direction exactly
+        // once.  Step 8 measured the consequence; this measures the cause.
         CHECK( o.n_repeated_axis == 0 );
 
         // THE TOLERANCE IS NOT LOAD-BEARING.  On these parent domains the
@@ -1972,4 +1986,217 @@ TEST_CASE( "STEP 9: find_change is well defined on every frame in the tested two
     std::cout << "  dart pairs built: 2d one element " << n_2d_pairs << " of 16, 3d refined "
               << n_3d_refined_pairs << " of 576, 2d refined " << n_2d_refined_pairs << " of 16"
               << std::endl;
+}
+
+// ---------------------------------------------------------------------------
+// STEP 10 (M5).  The differential gate run BEFORE the vector merge is switched
+// over, so that the switch is a substitution between two measured-identical
+// functions rather than a change of answer.
+//
+// WHAT THIS ADDS OVER STEP 8.  Step 8 compared coordinateTransform against a
+// formula restated locally in this file.  This compares the two PRODUCTION
+// call paths end to end: the frame-based coordinateTransform that the merge
+// uses today, against interfaceAtDart followed by interfaceCoordinateTransform,
+// which is what it will use.  The adapter is inside the comparison, so a
+// wrong side lookup cannot hide behind a right formula.
+//
+// WHAT IT DOES NOT ESTABLISH.  Agreement on every interface CLASS is not
+// agreement on every multipatch TOPOLOGY: both sides are functions of the
+// class alone, so a two-patch sweep exhausts their inputs, but the merge that
+// consumes them also walks phi, and that walk is covered only by fixtures.
+TEST_CASE( "STEP 10: interfaceCoordinateTransform against coordinateTransform, all 2d and 3d classes", "[rowd]" )
+{
+    const KnotVector kv( { 0, 0, 0, 1, 1, 1 }, ptol );
+    const auto cmap_1d = std::make_shared<const CombinatorialMap1d>( numElements( kv ) );
+    const auto param_1d = std::make_shared<const param::ParametricAtlas1d>( cmap_1d, parametricLengths( kv ) );
+    const auto cmap_2d = std::make_shared<const TPCombinatorialMap>( cmap_1d, cmap_1d );
+    const auto param_2d = std::make_shared<const param::TPParametricAtlas>( cmap_2d, param_1d, param_1d );
+    const auto cmap_3d = std::make_shared<const TPCombinatorialMap>( cmap_2d, cmap_1d );
+    const auto param_3d = std::make_shared<const param::TPParametricAtlas>( cmap_3d, param_2d, param_1d );
+
+    size_t n_darts = 0, n_axis_disagreements = 0, n_sign_disagreements = 0, n_adapter_throws = 0,
+           n_wrong_source_patch = 0, n_bad_sizes = 0;
+
+    const auto compareClass = [&]( const MultiPatchCombinatorialMap& mp,
+                                   const param::MultiPatchParametricAtlas& atlas,
+                                   const size_t dim,
+                                   const Dart::IndexType n_local_darts ) {
+        for( size_t p = 0; p < 2; p++ )
+        {
+            for( Dart::IndexType ld = 0; ld < n_local_darts; ld++ )
+            {
+                const Dart gd = mp.toGlobalDart( p, Dart( ld ) );
+                if( not phi( mp, static_cast<int>( dim ), gd ).has_value() ) continue;
+                n_darts++;
+
+                std::optional<PatchSideInterface> iface;
+                try
+                {
+                    iface = interfaceAtDart( mp, gd );
+                }
+                catch( const std::exception& )
+                {
+                    n_adapter_throws++;
+                    continue;
+                }
+
+                // The adapter must resolve to the patch the dart came from,
+                // or agreement on the transform would be accidental.
+                if( iface->source.constituent_id != p ) n_wrong_source_patch++;
+
+                const auto old_t = param::coordinateTransform( atlas, Cell( gd, dim - 1 ) );
+                const auto new_t = interfaceCoordinateTransform(
+                    dim, iface->source.side_id, iface->destination.side_id, iface->permutation );
+                if( old_t.size() != dim or new_t.size() != dim )
+                {
+                    n_bad_sizes++;
+                    continue;
+                }
+                for( size_t a = 0; a < dim; a++ )
+                {
+                    if( old_t.at( a ).first != new_t.at( a ).first ) n_axis_disagreements++;
+                    else if( old_t.at( a ).second != new_t.at( a ).second ) n_sign_disagreements++;
+                }
+            }
+        }
+    };
+
+    // 3d: the same enumeration step 8 uses, so the two gates cover identically.
+    size_t n_built = 0, n_rejected = 0;
+    const auto classes_3d = gluingClasses3d( n_built, n_rejected );
+    REQUIRE( classes_3d.size() == 144 );
+    for( const auto& [cls, conns] : classes_3d )
+    {
+        const auto mp = buildMultiPatch3d( 2, conns );
+        const param::MultiPatchParametricAtlas atlas(
+            mp, std::vector<std::shared_ptr<const param::TPParametricAtlas>>{ param_3d, param_3d } );
+        compareClass( *mp, atlas, 3, 24 );
+    }
+
+    // 2d: a 1d side admits only Flip1d, so the 4x4 side pairs are the classes.
+    // Enumerated from dart pairs, as in 3d, rather than assumed reachable.
+    std::map<GluingClass, DartConnections> classes_2d;
+    for( Dart::IndexType da = 0; da < 4; da++ )
+    {
+        for( Dart::IndexType db = 0; db < 4; db++ )
+        {
+            const DartConnections conns{ { { 0, Dart( da ) }, { 1, Dart( db ) } } };
+            const MultiPatchCombinatorialMap mp(
+                std::vector<std::shared_ptr<const TPCombinatorialMap>>( 2, cmap_2d ), conns );
+            for( const auto& [from, to] : mp.connections() )
+                if( from.constituent_id == 0 )
+                    classes_2d.insert(
+                        { { from.side_id, to.second.side_id, static_cast<size_t>( to.first ) }, conns } );
+        }
+    }
+    REQUIRE( classes_2d.size() == 16 );
+    for( const auto& [cls, conns] : classes_2d )
+    {
+        const auto mp = std::make_shared<const MultiPatchCombinatorialMap>(
+            std::vector<std::shared_ptr<const TPCombinatorialMap>>( 2, cmap_2d ), conns );
+        const param::MultiPatchParametricAtlas atlas(
+            mp, std::vector<std::shared_ptr<const param::TPParametricAtlas>>{ param_2d, param_2d } );
+        compareClass( *mp, atlas, 2, 4 );
+    }
+
+    std::cout << "STEP 10: darts compared " << n_darts << " over " << classes_3d.size() << " 3d and "
+              << classes_2d.size() << " 2d classes; axis disagreements " << n_axis_disagreements
+              << ", sign disagreements " << n_sign_disagreements << std::endl;
+
+    // 144 classes x 4 darts x 2 patches, plus 16 x 1 x 2.
+    CHECK( n_darts == 144 * 4 * 2 + 16 * 1 * 2 );
+    CHECK( n_adapter_throws == 0 );
+    CHECK( n_wrong_source_patch == 0 );
+    CHECK( n_bad_sizes == 0 );
+    CHECK( n_axis_disagreements == 0 );
+    CHECK( n_sign_disagreements == 0 );
+}
+
+// STEP 10, second half.  The class sweep above exhausts the two functions'
+// INPUTS; it says nothing about which faces the merge actually asks about.
+// This walks exactly that set - cornerCells of each patch, the faces the
+// vector merge enumerates - on the cyclic and reversing fixtures a two-patch
+// sweep cannot reach, and requires the adapter to be TOTAL on it.  Totality is
+// the one new failure mode the switch introduces: interfaceAtDart throws where
+// coordinateTransform returned an answer, so a face the merge visits that the
+// adapter refuses would be a regression no agreement check would catch.
+TEST_CASE( "STEP 10: the adapter is total on the faces the vector merge enumerates", "[rowd]" )
+{
+    const KnotVector kv( { 0, 0, 0, 1, 1, 1 }, ptol );
+    const auto cmap_1d = std::make_shared<const CombinatorialMap1d>( numElements( kv ) );
+    const auto param_1d = std::make_shared<const param::ParametricAtlas1d>( cmap_1d, parametricLengths( kv ) );
+    const auto cmap_2d = std::make_shared<const TPCombinatorialMap>( cmap_1d, cmap_1d );
+    const auto param_2d = std::make_shared<const param::TPParametricAtlas>( cmap_2d, param_1d, param_1d );
+    const auto cmap_3d = std::make_shared<const TPCombinatorialMap>( cmap_2d, cmap_1d );
+    const auto param_3d = std::make_shared<const param::TPParametricAtlas>( cmap_3d, param_2d, param_1d );
+
+    size_t n_faces = 0, n_glued = 0, n_self_glued = 0, n_adapter_throws = 0, n_disagreements = 0;
+
+    const auto walk = [&]( const std::shared_ptr<const MultiPatchCombinatorialMap>& mp,
+                           const std::shared_ptr<const param::TPParametricAtlas>& patch_atlas ) {
+        const param::MultiPatchParametricAtlas atlas(
+            mp, std::vector<std::shared_ptr<const param::TPParametricAtlas>>(
+                    mp->constituents().size(), patch_atlas ) );
+        for( size_t p = 0; p < mp->constituents().size(); p++ )
+        {
+            for( const topology::Cell& cc : param::cornerCells( *atlas.constituents().at( p ), 2 ) )
+            {
+                n_faces++;
+                const topology::Cell g( mp->toGlobalDart( p, cc.dart() ), cc.dim() );
+                if( not phi( *mp, 3, g.dart() ).has_value() ) continue;
+                n_glued++;
+                if( mp->toLocalDart( phi( *mp, 3, g.dart() ).value() ).first == p ) n_self_glued++;
+
+                std::optional<PatchSideInterface> iface;
+                try
+                {
+                    iface = interfaceAtDart( *mp, g.dart() );
+                }
+                catch( const std::exception& )
+                {
+                    n_adapter_throws++;
+                    continue;
+                }
+                const auto old_t = param::coordinateTransform( atlas, g );
+                const auto new_t = interfaceCoordinateTransform(
+                    3, iface->source.side_id, iface->destination.side_id, iface->permutation );
+                for( size_t a = 0; a < 3; a++ )
+                    if( old_t.at( a ) != new_t.at( a ) ) n_disagreements++;
+            }
+        }
+    };
+
+    walk( buildMultiPatch3d( 4, fourPatchConnections() ), param_3d );
+    walk( buildMultiPatch3d( 4, reversingFourPatchConnections() ), param_3d );
+    walk( buildMultiPatch3d( 3, reversingRingConnections() ), param_3d );
+    walk( buildMultiPatch3dFromSides( 3, connectionsOfSweptMultipatch( threePatchRing2d() ) ), param_3d );
+
+    // The one patch-boundary case no multi-patch fixture reaches: a single patch
+    // glued to itself, where source and destination name the same constituent.
+    // Modelled on MultiPatchSplineSpace_test's "Single patch periodic with
+    // multipatch" - two elements along s, wrapping s-lower onto s-upper.
+    const KnotVector kv_two( { 0, 0, 0, 1, 2, 2, 2 }, ptol );
+    const auto cmap_1d_two = std::make_shared<const CombinatorialMap1d>( numElements( kv_two ) );
+    const auto param_1d_two =
+        std::make_shared<const param::ParametricAtlas1d>( cmap_1d_two, parametricLengths( kv_two ) );
+    const auto cmap_2d_sg = std::make_shared<const TPCombinatorialMap>( cmap_1d_two, cmap_1d );
+    const auto param_2d_sg =
+        std::make_shared<const param::TPParametricAtlas>( cmap_2d_sg, param_1d_two, param_1d );
+    const auto cmap_3d_sg = std::make_shared<const TPCombinatorialMap>( cmap_2d_sg, cmap_1d );
+    const auto param_3d_sg =
+        std::make_shared<const param::TPParametricAtlas>( cmap_3d_sg, param_2d_sg, param_1d );
+    walk( std::make_shared<const MultiPatchCombinatorialMap>(
+              std::vector<std::shared_ptr<const TPCombinatorialMap>>{ cmap_3d_sg },
+              std::map<std::pair<size_t, Dart>, std::pair<size_t, Dart>>{
+                  { { 0, Dart( 19 ) }, { 0, Dart( 31 ) } } } ),
+          param_3d_sg );
+
+    std::cout << "STEP 10: merge faces " << n_faces << ", glued " << n_glued << " (self-glued "
+              << n_self_glued << "), adapter throws " << n_adapter_throws << ", disagreements "
+              << n_disagreements << std::endl;
+
+    CHECK( n_glued > 0 );
+    CHECK( n_self_glued > 0 );
+    CHECK( n_adapter_throws == 0 );
+    CHECK( n_disagreements == 0 );
 }

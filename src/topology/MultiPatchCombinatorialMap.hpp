@@ -63,6 +63,20 @@ namespace topology
         const DartRanges mRanges;
     };
 
+    // Which stored interface a patch-boundary face dart lies on.
+    struct PatchSideInterface
+    {
+        MultiPatchCombinatorialMap::ConstituentSide source;
+        MultiPatchCombinatorialMap::ConstituentSide destination;
+        MultiPatchCombinatorialMap::TPPermutation permutation;
+    };
+
+    /// @brief The interface a patch-boundary face dart lies on, read from the stored
+    /// connections rather than from phi.  Throws, naming the case, for an interior
+    /// face, for an unglued exterior side, and for connection data that disagrees
+    /// with itself.
+    PatchSideInterface interfaceAtDart( const MultiPatchCombinatorialMap& cmap, const Dart& global_dart );
+
     std::ostream& operator<<( std::ostream& o, const MultiPatchCombinatorialMap::ConstituentSide& cs );
     std::ostream& operator<<( std::ostream& o, const MultiPatchCombinatorialMap::TPPermutation& cs );
 

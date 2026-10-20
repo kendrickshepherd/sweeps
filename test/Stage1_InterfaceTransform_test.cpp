@@ -1096,3 +1096,98 @@ TEST_CASE( "strong-interface knot validation is side-aware" )
     INFO( "side-aware validation verdicts, " << joined( wrong ) );
     CHECK( wrong.empty() );
 }
+
+TEST_CASE( "interfaceCoordinateTransform rejects malformed interface data" )
+{
+    // Validation is inherited: sideCoordinateTransform is called first, and it
+    // rejects the dimension, the side ids and the permutation-dimension pairing.
+    CHECK_THROWS( interfaceCoordinateTransform( 1, 0, 0, TPPermutation::Flip1d ) );
+    CHECK_THROWS( interfaceCoordinateTransform( 4, 0, 0, TPPermutation::ZeroToZero ) );
+    CHECK_THROWS( interfaceCoordinateTransform( 2, 4, 0, TPPermutation::Flip1d ) );
+    CHECK_THROWS( interfaceCoordinateTransform( 2, 0, 4, TPPermutation::Flip1d ) );
+    CHECK_THROWS( interfaceCoordinateTransform( 3, 6, 0, TPPermutation::ZeroToZero ) );
+    CHECK_THROWS( interfaceCoordinateTransform( 3, 0, 6, TPPermutation::ZeroToZero ) );
+    CHECK_THROWS( interfaceCoordinateTransform( 2, 0, 0, TPPermutation::ZeroToZero ) );
+    CHECK_THROWS( interfaceCoordinateTransform( 3, 0, 0, TPPermutation::Flip1d ) );
+}
+
+TEST_CASE( "interfaceCoordinateTransform reproduces the hand-pinned 2d interface transforms" )
+{
+    // All 16 ordered 2d side pairs, TRANSCRIBED from the expectations pinned in
+    // ParametricAtlas_test against the frame-based implementation, with darts
+    // mapped to sides by the S1,S0,T1,T0 ordering {3,0,2,1}.  A specification,
+    // not a read-back: nothing here consults the new helper's own rules.
+    using Entry = std::pair<size_t, bool>;
+    const std::map<std::pair<size_t, size_t>, std::vector<Entry>> expected{
+        { { 3, 3 }, { { 0, false }, { 1, false } } }, { { 3, 0 }, { { 1, false }, { 0, true } } },
+        { { 3, 2 }, { { 0, true }, { 1, true } } },   { { 3, 1 }, { { 1, true }, { 0, false } } },
+        { { 0, 3 }, { { 1, true }, { 0, false } } },  { { 0, 0 }, { { 0, false }, { 1, false } } },
+        { { 0, 2 }, { { 1, false }, { 0, true } } },  { { 0, 1 }, { { 0, true }, { 1, true } } },
+        { { 2, 3 }, { { 0, true }, { 1, true } } },   { { 2, 0 }, { { 1, true }, { 0, false } } },
+        { { 2, 2 }, { { 0, false }, { 1, false } } }, { { 2, 1 }, { { 1, false }, { 0, true } } },
+        { { 1, 3 }, { { 1, false }, { 0, true } } },  { { 1, 0 }, { { 0, true }, { 1, true } } },
+        { { 1, 2 }, { { 1, true }, { 0, false } } },  { { 1, 1 }, { { 0, false }, { 1, false } } } };
+
+    REQUIRE( expected.size() == 16 );
+    for( const auto& [sides, want] : expected )
+    {
+        CAPTURE( sides.first, sides.second );
+        const auto got = interfaceCoordinateTransform( 2, sides.first, sides.second, TPPermutation::Flip1d );
+        REQUIRE( got.size() == 2 );
+        CHECK( got.at( 0 ) == want.at( 0 ) );
+        CHECK( got.at( 1 ) == want.at( 1 ) );
+    }
+}
+
+TEST_CASE( "interfaceCoordinateTransform is a signed permutation that composes to the identity" )
+{
+    size_t n_classes = 0, n_not_permutation = 0, n_normal_misplaced = 0, n_inverse_failures = 0;
+
+    const auto check = [&]( const size_t dim, const size_t a, const size_t b, const TPPermutation p ) {
+        n_classes++;
+        const auto fwd = interfaceCoordinateTransform( dim, a, b, p );
+        const auto rev = interfaceCoordinateTransform( dim, b, a, p );
+        if( fwd.size() != dim or rev.size() != dim )
+        {
+            n_not_permutation++;
+            return;
+        }
+
+        // Every axis is some axis's image exactly once, so no entry is left
+        // unwritten and no two sources collide.
+        std::set<size_t> destinations;
+        for( const auto& [d, aligned] : fwd ) destinations.insert( d );
+        if( destinations.size() != dim ) n_not_permutation++;
+
+        // Consistency between the two blocks: the interface normal takes the
+        // partner's normal slot, so no tangential axis may land there.
+        if( fwd.at( a / 2 ).first != b / 2 ) n_normal_misplaced++;
+
+        // Reading one interface from the far side must invert it, signs
+        // included.  The stored permutation is symmetric in the two sides, so
+        // production may look the interface up from either end and must get
+        // mutually inverse answers.
+        for( size_t s = 0; s < dim; s++ )
+        {
+            const auto [d, fwd_aligned] = fwd.at( s );
+            const auto [back, rev_aligned] = rev.at( d );
+            if( back != s or fwd_aligned != rev_aligned ) n_inverse_failures++;
+        }
+    };
+
+    for( size_t a = 0; a < 4; a++ )
+        for( size_t b = 0; b < 4; b++ ) check( 2, a, b, TPPermutation::Flip1d );
+
+    for( size_t a = 0; a < 6; a++ )
+        for( size_t b = 0; b < 6; b++ )
+            for( const TPPermutation p : { TPPermutation::ZeroToZero,
+                                           TPPermutation::ZeroToOne,
+                                           TPPermutation::ZeroToTwo,
+                                           TPPermutation::ZeroToThree } )
+                check( 3, a, b, p );
+
+    CHECK( n_classes == 16 + 144 );
+    CHECK( n_not_permutation == 0 );
+    CHECK( n_normal_misplaced == 0 );
+    CHECK( n_inverse_failures == 0 );
+}

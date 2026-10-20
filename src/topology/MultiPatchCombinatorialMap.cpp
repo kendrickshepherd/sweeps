@@ -1,11 +1,14 @@
 #include <MultiPatchCombinatorialMap.hpp>
 #include <IndexOperations.hpp>
+#include <SideCoordinateTransform.hpp>
 #include <TPCombinatorialMap.hpp>
 #include <utility>
 #include <CombinatorialMapMethods.hpp>
 #include <GlobalCellMarker.hpp>
 #include <algorithm>
 #include <numeric>
+#include <sstream>
+#include <stdexcept>
 
 #include <Logging.hpp>
 
@@ -194,14 +197,68 @@ namespace topology
         return Dart( flattenFull( cmap, unflat_darts ).id() + local_dart_id );
     }
 
+    namespace
+    {
+        // Run first by both public constructors, before anything dereferences a
+        // patch, so the two admit the same constituent lists.  Dimension is
+        // checked across the whole list rather than per connection: dim()
+        // reports only the first patch's, so differing patches that are never
+        // glued to each other would otherwise pass.
+        void validateConstituents( const std::vector<std::shared_ptr<const TPCombinatorialMap>>& constituents )
+        {
+            if( constituents.empty() ) throw std::runtime_error( "Cannot create multipatch of zero patches" );
+
+            for( size_t i = 0; i < constituents.size(); i++ )
+            {
+                std::ostringstream msg;
+                if( constituents.at( i ) == nullptr )
+                {
+                    msg << "Multipatch constituent " << i << " is a null patch.";
+                    throw std::runtime_error( msg.str() );
+                }
+                if( constituents.at( i )->dim() != constituents.front()->dim() )
+                {
+                    msg << "Multipatch constituent " << i << " has dimension " << constituents.at( i )->dim()
+                        << ", but constituent 0 has dimension " << constituents.front()->dim()
+                        << "; all patches must have the same dimension.";
+                    throw std::runtime_error( msg.str() );
+                }
+            }
+        }
+    } // namespace
+
     using ConstituentSide = MultiPatchCombinatorialMap::ConstituentSide;
     std::map<ConstituentSide, std::pair<TPPermutation, ConstituentSide>> initializeInterMapConnections(
         const std::vector<std::shared_ptr<const TPCombinatorialMap>>& constituents,
         const std::map<std::pair<size_t, Dart>, std::pair<size_t, Dart>>& connections )
     {
-        if( constituents.size() == 0 ) throw std::runtime_error( "Cannot create multipatch of zero patches" );
+        validateConstituents( constituents );
 
         std::map<ConstituentSide, std::pair<TPPermutation, ConstituentSide>> out;
+
+        // A patch side has at most one whole-side partner.  Restating the same
+        // gluing is harmless; assigning a second partner is rejected rather
+        // than silently dropped, as map::emplace would.
+        const auto addConnection = [&out]( const ConstituentSide& from,
+                                           const TPPermutation perm,
+                                           const ConstituentSide& to ) {
+            const auto [it, inserted] = out.insert( { from, { perm, to } } );
+            if( inserted ) return;
+
+            const auto& [held_perm, held_to] = it->second;
+            if( held_perm == perm and held_to.constituent_id == to.constituent_id and
+                held_to.side_id == to.side_id )
+            {
+                return;
+            }
+
+            std::ostringstream msg;
+            msg << "Patch side " << from << " is already connected to " << held_to << " by " << held_perm
+                << ", so it cannot also connect to " << to << " by " << perm
+                << ".  A patch side supports at most one whole-side partner.";
+            throw std::runtime_error( msg.str() );
+        };
+
         for( const auto& connection : connections )
         {
             const TPCombinatorialMap& left_cmap = *constituents.at( connection.first.first );
@@ -227,12 +284,117 @@ namespace topology
                 return TPPermutation( ( std::to_underlying( left_pos ) + std::to_underlying( right_pos ) ) % 4 );
             }();
 
-            out.emplace( left_side, std::pair<TPPermutation, ConstituentSide>{ perm, right_side } );
-            out.emplace( right_side, std::pair<TPPermutation, ConstituentSide>{ perm, left_side } );
+            addConnection( left_side, perm, right_side );
+            addConnection( right_side, perm, left_side );
         }
 
         return out;
     }
+
+    PatchSideInterface interfaceAtDart( const MultiPatchCombinatorialMap& cmap, const Dart& global_dart )
+    {
+        const auto [patch_id, local_dart] = cmap.toLocalDart( global_dart );
+        const TPCombinatorialMap& patch = *cmap.constituents().at( patch_id );
+
+        // whichBoundary reads an ELEMENT-local face direction, which an interior
+        // face has just as much as a boundary one, so the patch-boundary test has
+        // to come first.  Without it an interior face silently borrows whatever
+        // connection is registered on the exterior side of the same direction.
+        if( phi( patch, static_cast<int>( patch.dim() ), local_dart ).has_value() )
+        {
+            std::ostringstream msg;
+            msg << "Dart " << global_dart.id() << " lies on an interior face of patch " << patch_id
+                << ", which is on no patch interface.";
+            throw std::runtime_error( msg.str() );
+        }
+
+        const ConstituentSide source{ patch_id, whichBoundary( patch, local_dart ) };
+
+        const auto found = cmap.connections().find( source );
+        if( found == cmap.connections().end() )
+        {
+            std::ostringstream msg;
+            msg << "Patch side " << source << " is an unglued exterior side, so it has no interface.";
+            throw std::runtime_error( msg.str() );
+        }
+        const auto& [permutation, destination] = found->second;
+
+        const auto back = cmap.connections().find( destination );
+        if( back == cmap.connections().end() or back->second.first != permutation or
+            back->second.second.constituent_id != source.constituent_id or
+            back->second.second.side_id != source.side_id )
+        {
+            std::ostringstream msg;
+            msg << "Stored connectivity is inconsistent: patch side " << source << " names " << destination
+                << " as its partner, which does not name it back by the same permutation.";
+            throw std::runtime_error( msg.str() );
+        }
+
+        return { source, destination, permutation };
+    }
+
+    namespace
+    {
+        // A map key gives only one partner per SOURCE side, which is weaker than
+        // the invariant: it permits A -> B alongside C -> B, a missing reverse
+        // entry, and a reverse entry naming a different permutation.  Requiring
+        // every connection to be named back identically rules out all three,
+        // because the single entry for B can name back only one of A and C.
+        const std::vector<std::shared_ptr<const TPCombinatorialMap>>& validateMultiPatchStructure(
+            const std::vector<std::shared_ptr<const TPCombinatorialMap>>& constituents,
+            const std::map<ConstituentSide, std::pair<TPPermutation, ConstituentSide>>& connections )
+        {
+            validateConstituents( constituents );
+
+            const auto malformed = [&]( const ConstituentSide& from,
+                                        const ConstituentSide& to,
+                                        const TPPermutation perm,
+                                        const std::string& why ) {
+                std::ostringstream msg;
+                msg << "Malformed patch connection " << from << " -> " << to << " by " << perm << ": " << why;
+                return std::runtime_error( msg.str() );
+            };
+
+            for( const auto& [from, connection] : connections )
+            {
+                const auto& [perm, to] = connection;
+
+                if( from.constituent_id >= constituents.size() or to.constituent_id >= constituents.size() )
+                    throw malformed( from, to, perm, "a patch id is outside the constituent list." );
+
+                // Unreachable while the whole-list rule above holds; retained so
+                // relaxing that rule cannot silently admit a mixed-dimension gluing.
+                const size_t dim = constituents.at( from.constituent_id )->dim();
+                if( constituents.at( to.constituent_id )->dim() != dim )
+                    throw malformed( from, to, perm, "the two patches have different dimensions." );
+
+                if( from.constituent_id == to.constituent_id and from.side_id == to.side_id )
+                    throw malformed( from, to, perm, "a patch side cannot be glued to itself." );
+
+                // The single authority on the dimension, the side ids, and the
+                // permutation/dimension pairing.  Its reason is re-reported here
+                // so every refusal names the connection it came from.
+                try
+                {
+                    sideCoordinateTransform( dim, from.side_id, to.side_id, perm );
+                }
+                catch( const std::invalid_argument& e )
+                {
+                    throw malformed( from, to, perm, e.what() );
+                }
+
+                const auto back = connections.find( to );
+                if( back == connections.end() )
+                    throw malformed( from, to, perm, "the partner side registers no connection of its own." );
+                if( back->second.first != perm )
+                    throw malformed( from, to, perm, "the partner side names a different permutation." );
+                if( back->second.second.constituent_id != from.constituent_id or
+                    back->second.second.side_id != from.side_id )
+                    throw malformed( from, to, perm, "the partner side names a different side in return." );
+            }
+            return constituents;
+        }
+    } // namespace
 
     MultiPatchCombinatorialMap::MultiPatchCombinatorialMap(
         const std::vector<std::shared_ptr<const TPCombinatorialMap>>& constituents,
@@ -243,7 +405,11 @@ namespace topology
     MultiPatchCombinatorialMap::MultiPatchCombinatorialMap(
         const std::vector<std::shared_ptr<const TPCombinatorialMap>>& constituents,
         const std::map<ConstituentSide, std::pair<TPPermutation, ConstituentSide>>& connections )
-        : mSubMaps( constituents ), mInterMapConnections( connections ), mRanges( initializeRanges( constituents ) )
+        // Validated in the first member's initializer, so before initializeRanges
+        // dereferences each patch.
+        : mSubMaps( validateMultiPatchStructure( constituents, connections ) ),
+          mInterMapConnections( connections ),
+          mRanges( initializeRanges( constituents ) )
     {}
 
     std::pair<size_t, Dart> MultiPatchCombinatorialMap::toLocalDart( const Dart& global_dart ) const
