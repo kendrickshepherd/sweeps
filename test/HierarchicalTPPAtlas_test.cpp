@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include <HierarchicalTPParametricAtlas.hpp>
 #include <CombinatorialMapMethods.hpp>
 #include <Logging.hpp>
@@ -211,4 +212,72 @@ TEST_CASE( "Simple hierarchical atlas 3" )
         CHECK( ppt.mBaryCoordIsZero == BaryCoordIsZeroVec( { true, false, false, false } ) );
     }
 
+}
+
+// Item 1, step 6 (outstanding_issues.txt): the hierarchy assigns element e's
+// children as e * r .. e * r + r - 1 per direction, so each level's breakpoints
+// must split every coarser element into exactly those children.
+namespace
+{
+    using Breakpoints = std::vector<double>;
+
+    std::shared_ptr<const ParametricAtlas1d> atlasOf( const Breakpoints& bp )
+    {
+        Eigen::VectorXd lengths( bp.size() - 1 );
+        for( size_t i = 0; i + 1 < bp.size(); i++ ) lengths( i ) = bp.at( i + 1 ) - bp.at( i );
+        return std::make_shared<const ParametricAtlas1d>( std::make_shared<const CombinatorialMap1d>( bp.size() - 1 ),
+                                                          lengths );
+    }
+
+    std::shared_ptr<const TPParametricAtlas> tpAtlasOf( const std::vector<Breakpoints>& directions )
+    {
+        const auto a0 = atlasOf( directions.at( 0 ) );
+        const auto a1 = atlasOf( directions.at( 1 ) );
+        const auto square = std::make_shared<const TPParametricAtlas>(
+            std::make_shared<const TPCombinatorialMap>( a0->cmapPtr(), a1->cmapPtr() ), a0, a1 );
+        if( directions.size() == 2 ) return square;
+        const auto a2 = atlasOf( directions.at( 2 ) );
+        return std::make_shared<const TPParametricAtlas>(
+            std::make_shared<const TPCombinatorialMap>( square->cmapPtr(), a2->cmapPtr() ), square, a2 );
+    }
+
+    // Two levels with every coarse element a leaf.
+    void buildTwoLevels( const std::vector<Breakpoints>& coarse, const std::vector<Breakpoints>& fine )
+    {
+        const auto level0 = tpAtlasOf( coarse );
+        const auto level1 = tpAtlasOf( fine );
+        std::vector<Cell> leaves;
+        iterateCellsWhile( level0->cmap(), level0->cmap().dim(), [&]( const Cell& c ) {
+            leaves.push_back( c );
+            return true;
+        } );
+        const auto cmap = std::make_shared<const HierarchicalTPCombinatorialMap>(
+            std::vector<std::shared_ptr<const TPCombinatorialMap>>{ level0->cmapPtr(), level1->cmapPtr() },
+            std::vector<std::vector<Cell>>{ leaves, {} } );
+        const HierarchicalTPParametricAtlas atlas( cmap, { level0, level1 } );
+    }
+}
+
+TEST_CASE( "Hierarchical atlas accepts nested children of unequal length", "[hierarchical_atlas_children]" )
+{
+    CHECK_NOTHROW( buildTwoLevels( { { 0, 0.5, 1 }, { 0, 1 } }, { { 0, 0.2, 0.5, 0.9, 1 }, { 0, 1.0 / 3.0, 1 } } ) );
+    CHECK_NOTHROW( buildTwoLevels( { { 0, 0.5, 1 }, { 0, 1 }, { 0, 2 } },
+                                   { { 0, 0.2, 0.5, 0.9, 1 }, { 0, 1.0 / 3.0, 1 }, { 0, 0.5, 2 } } ) );
+}
+
+TEST_CASE( "Hierarchical atlas rejects children outside their claimed parent", "[hierarchical_atlas_children]" )
+{
+    const Catch::Matchers::StringContainsMatcher untiled =
+        Catch::Matchers::ContainsSubstring( "must split into the same number of children" );
+    // Ratio 3, but [0, 0.5] splits in two and [0.5, 1] in four.
+    CHECK_THROWS_WITH( buildTwoLevels( { { 0, 0.5, 1 }, { 0, 1 } }, { { 0, 0.25, 0.5, 0.6, 0.7, 0.8, 1 }, { 0, 1 } } ),
+                       untiled );
+    // Ratio 2, but 0.5 is not a fine breakpoint.
+    CHECK_THROWS_WITH( buildTwoLevels( { { 0, 0.5, 1 }, { 0, 1 } }, { { 0, 0.3, 0.6, 0.8, 1 }, { 0, 1 } } ), untiled );
+    // Ratio 2, but the fine domain is longer.
+    CHECK_THROWS_WITH( buildTwoLevels( { { 0, 1 }, { 0, 1 } }, { { 0, 1, 2 }, { 0, 1 } } ), untiled );
+    // The third direction of a volume.
+    CHECK_THROWS_WITH( buildTwoLevels( { { 0, 1 }, { 0, 1 }, { 0, 0.5, 1 } },
+                                       { { 0, 1 }, { 0, 1 }, { 0, 0.25, 0.5, 0.6, 0.7, 0.8, 1 } } ),
+                       untiled );
 }

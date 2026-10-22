@@ -1,4 +1,4 @@
-// Item 1, steps 4 and 5 (outstanding_issues.txt): algebraic correctness of
+// Item 1, steps 4 to 6 (outstanding_issues.txt): algebraic correctness of
 // asymmetric THB leaf selection across a same-mesh multipatch interface.
 #include <catch2/catch_test_macros.hpp>
 #include <HierarchicalMultiPatchSplineSpace.hpp>
@@ -6,6 +6,7 @@
 #include <KnotVector.hpp>
 #include <MultiPatchSplineFactory.hpp>
 #include <TraceExtraction.hpp>
+#include <TraceMesh.hpp>
 #include <VectorConformingHierarchicalMultiPatchSplineSpace.hpp>
 #include <CombinatorialMapMethods.hpp>
 #include <Eigen/Dense>
@@ -15,6 +16,7 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -876,4 +878,536 @@ TEST_CASE( "Three levels, jump 2 inside a patch: THB activity and H1 conformity"
     CHECK( o.h1_faces == 4 );
     INFO( joined( o.problems ) );
     CHECK( o.problems.empty() );
+}
+
+// Step 6: patch-interface enumeration under asymmetric leaves (E3).  Both
+// patches share the breakpoints of each level; patch 0's s-max side is glued
+// to patch 1's s-min side with t running the same way on both.  A reversed
+// layout glues s-max to s-max with t reversed, and mirrors patch 1's t
+// breakpoints.
+namespace
+{
+    using ElementKey = std::array<size_t, 4>; // level, patch, s element, t element
+
+    struct TwoPatchLayout
+    {
+        std::string name;
+        std::vector<std::array<std::vector<double>, 2>> breakpoints; // per level: s, t of patch 0
+        std::vector<ElementKey> leaves;
+        bool reversed = false;
+    };
+
+    InternalConnectionsMap sMaxToSMax()
+    {
+        const ConstituentSide first{ 0, ElementSide( 0, false ).sideId() };
+        const ConstituentSide second{ 1, ElementSide( 0, false ).sideId() };
+        return { { first, { TPPermutation::Flip1d, second } }, { second, { TPPermutation::Flip1d, first } } };
+    }
+
+    std::array<std::vector<double>, 2>
+        patchBreakpoints( const TwoPatchLayout& layout, const size_t level, const size_t patch )
+    {
+        std::array<std::vector<double>, 2> bp = layout.breakpoints.at( level );
+        if( layout.reversed and patch == 1 )
+        {
+            const double ends = bp[1].front() + bp[1].back();
+            std::reverse( bp[1].begin(), bp[1].end() );
+            for( double& t : bp[1] ) t = ends - t;
+        }
+        return bp;
+    }
+
+    std::string describe( const ElementKey& k )
+    {
+        std::ostringstream out;
+        out << "p" << k[1] << " L" << k[0] << " (" << k[2] << "," << k[3] << ")";
+        return out.str();
+    }
+
+    // Throws unless the element is named by a leaf dart.
+    ElementKey keyOf( const HierarchicalMultiPatchCombinatorialMap& cmap, const Cell& element )
+    {
+        const auto [level, level_d] = cmap.unrefinedAncestorDartOfCell( element );
+        const MultiPatchCombinatorialMap& level_cmap = *cmap.refinementLevels().at( level );
+        const auto [patch, patch_d] = level_cmap.toLocalDart( level_d );
+        const FullyUnflattenedDart unflat = unflattenFull( *level_cmap.constituents().at( patch ), patch_d );
+        return { level, patch, unflat.unflat_darts.at( 0 ).id(), unflat.unflat_darts.at( 1 ).id() };
+    }
+
+    Box boxOf( const TwoPatchLayout& layout, const ElementKey& k )
+    {
+        const auto bp = patchBreakpoints( layout, k[0], k[1] );
+        return { std::array<double, 2>{ bp[0].at( k[2] ), bp[0].at( k[2] + 1 ) },
+                 std::array<double, 2>{ bp[1].at( k[3] ), bp[1].at( k[3] + 1 ) } };
+    }
+
+    bool onInterface( const TwoPatchLayout& layout, const ElementKey& k )
+    {
+        const std::vector<double>& s = layout.breakpoints.front()[0];
+        const bool s_max = k[1] == 0 or layout.reversed;
+        return std::abs( boxOf( layout, k )[0][s_max ? 1 : 0] - ( s_max ? s.back() : s.front() ) ) < geom_tol;
+    }
+
+    // A patch 1 t in patch 0's t.
+    double patchZeroT( const TwoPatchLayout& layout, const size_t patch, const double t )
+    {
+        const std::vector<double>& bp = layout.breakpoints.front()[1];
+        return layout.reversed and patch == 1 ? bp.front() + bp.back() - t : t;
+    }
+
+    // The t interval of a leaf's interface side, in patch 0's t.
+    std::array<double, 2> interfaceInterval( const TwoPatchLayout& layout, const ElementKey& k )
+    {
+        const std::array<double, 2> t = boxOf( layout, k )[1];
+        const double a = patchZeroT( layout, k[1], t[0] );
+        const double b = patchZeroT( layout, k[1], t[1] );
+        return { std::min( a, b ), std::max( a, b ) };
+    }
+
+    // Leaf pairs, (patch 0, patch 1), whose interface sides overlap in t.
+    std::set<std::pair<ElementKey, ElementKey>> expectedInterfacePairs( const TwoPatchLayout& layout )
+    {
+        std::set<std::pair<ElementKey, ElementKey>> out;
+        for( const ElementKey& a : layout.leaves )
+            for( const ElementKey& b : layout.leaves )
+            {
+                if( a[1] != 0 or b[1] != 1 or not onInterface( layout, a ) or not onInterface( layout, b ) ) continue;
+                const std::array<double, 2> ta = interfaceInterval( layout, a );
+                const std::array<double, 2> tb = interfaceInterval( layout, b );
+                if( std::min( ta[1], tb[1] ) - std::max( ta[0], tb[0] ) > geom_tol ) out.insert( { a, b } );
+            }
+        return out;
+    }
+
+    // The side of box a that box b touches along a positive length.
+    std::optional<ElementSide> facingSide( const Box& a, const Box& b )
+    {
+        for( size_t axis = 0; axis < 2; axis++ )
+        {
+            const size_t other = 1 - axis;
+            if( std::min( a[other][1], b[other][1] ) - std::max( a[other][0], b[other][0] ) <= geom_tol ) continue;
+            if( std::abs( a[axis][1] - b[axis][0] ) < geom_tol ) return ElementSide( axis, false );
+            if( std::abs( a[axis][0] - b[axis][1] ) < geom_tol ) return ElementSide( axis, true );
+        }
+        return std::nullopt;
+    }
+
+    // Same-level leaf pairs of one patch whose boxes share an edge, smaller key first.
+    std::set<std::pair<ElementKey, ElementKey>> expectedInteriorPairs( const TwoPatchLayout& layout )
+    {
+        std::set<std::pair<ElementKey, ElementKey>> out;
+        for( const ElementKey& a : layout.leaves )
+            for( const ElementKey& b : layout.leaves )
+                if( a < b and a[0] == b[0] and a[1] == b[1] and
+                    facingSide( boxOf( layout, a ), boxOf( layout, b ) ).has_value() )
+                    out.insert( { a, b } );
+        return out;
+    }
+
+    struct EnumerationOutcome
+    {
+        size_t expected_pairs = 0;
+        std::vector<std::string> problems;
+        std::vector<std::string> interior_problems;
+    };
+
+    EnumerationOutcome patchInterfaceEnumeration( const TwoPatchLayout& layout )
+    {
+        const double ptol = 1e-10;
+        std::vector<std::shared_ptr<const MultiPatchSplineSpace>> levels;
+        std::vector<std::vector<Cell>> leaves( layout.breakpoints.size() );
+        for( size_t level = 0; level < layout.breakpoints.size(); level++ )
+        {
+            std::vector<std::shared_ptr<const TPSplineSpace>> patches;
+            for( size_t patch = 0; patch < 2; patch++ )
+            {
+                SmallVector<KnotVector, 3> kvs;
+                for( const std::vector<double>& dir : patchBreakpoints( layout, level, patch ) )
+                {
+                    std::vector<double> knots{ dir.front(), dir.front() };
+                    knots.insert( knots.end(), dir.begin(), dir.end() );
+                    knots.insert( knots.end(), { dir.back(), dir.back() } );
+                    kvs.push_back( KnotVector( knots, ptol ) );
+                }
+                patches.push_back( makePatch( kvs, { 2, 2 } ) );
+            }
+            levels.push_back( std::make_shared<const MultiPatchSplineSpace>(
+                buildH1MultiPatchSplineSpace( patches, layout.reversed ? sMaxToSMax() : sMaxToSMin() ) ) );
+        }
+        for( const auto& [level, patch, s, t] : layout.leaves )
+            leaves.at( level ).push_back( patchTopCellAt( levelCMap( *levels.at( level ) ), patch, { s, t } ) );
+
+        const HierarchicalMultiPatchSplineSpace h1 = buildHierarchicalSplineSpace( levels, leaves );
+        const VectorConformingHierarchicalMultiPatchSplineSpace hdiv = buildHDivHierarchicalMultiPatchSplineSpace( h1 );
+        const VectorConformingHierarchicalMultiPatchSplineSpace hcurl =
+            buildHCurlHierarchicalMultiPatchSplineSpace( h1 );
+
+        const std::set<ElementKey> leaf_keys( layout.leaves.begin(), layout.leaves.end() );
+        const std::set<std::pair<ElementKey, ElementKey>> expected = expectedInterfacePairs( layout );
+        EnumerationOutcome out{ expected.size(), {}, {} };
+        const auto check = [&]( const std::string& name, const SplineSpace& ss ) {
+            const auto& cmap = dynamic_cast<const HierarchicalMultiPatchCombinatorialMap&>(
+                ss.basisComplex().parametricAtlas().cmap() );
+            const std::string prefix = layout.name + ", " + name + ": ";
+            std::multiset<std::pair<ElementKey, ElementKey>> actual;
+            std::map<ElementKey, double> covered;
+            for( const TraceMeshInterface& iface : patchTraceMeshInterfaces( ss ) )
+            {
+                if( iface.type != TraceMeshEntityType::PatchInterface or not iface.second.has_value() )
+                {
+                    out.problems.push_back( prefix + "a record is not a two-sided patch interface" );
+                    continue;
+                }
+                ElementKey first;
+                ElementKey second;
+                try
+                {
+                    first = keyOf( cmap, iface.first.element );
+                    second = keyOf( cmap, iface.second->element );
+                }
+                catch( const std::exception& e )
+                {
+                    out.problems.push_back( prefix + "a patch interface side is not named by a leaf dart: " +
+                                            e.what() );
+                    continue;
+                }
+                if( first[0] != iface.first.level or second[0] != iface.second->level or
+                    first[1] != iface.first.patch_id or second[1] != iface.second->patch_id or first[1] == second[1] )
+                    out.problems.push_back( prefix + "record fields disagree with " + describe( first ) + " / " +
+                                            describe( second ) );
+                for( const ElementKey& k : { first, second } )
+                    if( not leaf_keys.contains( k ) ) out.problems.push_back( prefix + "non-leaf " + describe( k ) );
+                try
+                {
+                    traceInterfaceElement( ss, iface );
+                }
+                catch( const std::exception& e )
+                {
+                    out.problems.push_back( prefix + "traceInterfaceElement on " + describe( first ) + " / " +
+                                            describe( second ) + " throws: " + e.what() );
+                }
+                actual.insert( first[1] == 0 ? std::pair{ first, second } : std::pair{ second, first } );
+
+                // Both sides place each fragment point at one t of the intersection
+                // of the two leaf sides; the finer side is whole.
+                const std::array<double, 2> ta = interfaceInterval( layout, first );
+                const std::array<double, 2> tb = interfaceInterval( layout, second );
+                const std::array<double, 2> fragment = { std::max( ta[0], tb[0] ), std::min( ta[1], tb[1] ) };
+                for( const auto& [k, side] : { std::pair{ first, &iface.first }, std::pair{ second, &*iface.second } } )
+                {
+                    const TraceSideEmbedding& e = side->embedding;
+                    if( e.offset.size() != 1 )
+                    {
+                        out.problems.push_back( prefix + describe( k ) + " has an embedding of rank " +
+                                                std::to_string( e.offset.size() ) );
+                        continue;
+                    }
+                    covered[k] += e.scale.at( 0 );
+                    if( k[0] == std::max( first[0], second[0] ) and
+                        ( std::abs( e.offset.at( 0 ) ) > geom_tol or std::abs( e.scale.at( 0 ) - 1.0 ) > geom_tol ) )
+                        out.problems.push_back( prefix + "finer side " + describe( k ) + " is not whole" );
+                    const Box b = boxOf( layout, k );
+                    for( const double xi : { 0.0, 0.25, 1.0 } )
+                    {
+                        const double y = embedTraceFragmentPoint( e, Eigen::VectorXd::Constant( 1, xi ) )( 0 );
+                        const double t = patchZeroT( layout, k[1], b[1][0] + y * ( b[1][1] - b[1][0] ) );
+                        const double expected = fragment[0] + xi * ( fragment[1] - fragment[0] );
+                        if( std::abs( t - expected ) > geom_tol )
+                        {
+                            std::ostringstream text;
+                            text << prefix << describe( first ) << " / " << describe( second ) << ": "
+                                 << describe( k ) << " places fragment point " << xi << " at t = " << t
+                                 << ", not " << expected;
+                            out.problems.push_back( text.str() );
+                        }
+                    }
+                }
+            }
+            for( const std::vector<TraceMeshInterface>& records :
+                 { boundaryTraceMeshInterfaces( ss ), interiorTraceMeshInterfaces( ss ) } )
+                for( const TraceMeshInterface& iface : records )
+                    for( const TraceMeshSide* side : { &iface.first, iface.second ? &*iface.second : nullptr } )
+                    {
+                        if( side == nullptr ) continue;
+                        const std::string kind = iface.isBoundary() ? "boundary" : "interior";
+                        try
+                        {
+                            const ElementKey k = keyOf( cmap, side->element );
+                            if( not leaf_keys.contains( k ) or k[0] != side->level or k[1] != side->patch_id )
+                                out.problems.push_back( prefix + kind + " record names " + describe( k ) );
+                        }
+                        catch( const std::exception& e )
+                        {
+                            out.problems.push_back( prefix + kind + " record side " +
+                                                    std::to_string( side->side.sideId() ) + " in patch " +
+                                                    std::to_string( side->patch_id ) + " at level " +
+                                                    std::to_string( side->level ) +
+                                                    " is not named by a leaf dart: " + e.what() );
+                        }
+                    }
+
+            const std::set<std::pair<ElementKey, ElementKey>> expected_interior = expectedInteriorPairs( layout );
+            std::multiset<std::pair<ElementKey, ElementKey>> interior;
+            for( const TraceMeshInterface& iface : interiorTraceMeshInterfaces( ss ) )
+            {
+                ElementKey first;
+                ElementKey second;
+                try
+                {
+                    first = keyOf( cmap, iface.first.element );
+                    second = keyOf( cmap, iface.second.value().element );
+                }
+                catch( const std::exception& )
+                {
+                    continue; // reported by the leaf-dart gate above
+                }
+                const std::string text = describe( first ) + " side " + std::to_string( iface.first.side.sideId() ) +
+                                         " / " + describe( second ) + " side " +
+                                         std::to_string( iface.second->side.sideId() );
+                if( facingSide( boxOf( layout, first ), boxOf( layout, second ) ) != iface.first.side or
+                    facingSide( boxOf( layout, second ), boxOf( layout, first ) ) != iface.second->side )
+                    out.interior_problems.push_back( prefix + "interior sides do not face each other: " + text );
+                if( iface.first.side.lower )
+                    out.interior_problems.push_back( prefix + "interior first side is a min side: " + text );
+                interior.insert( std::minmax( first, second ) );
+            }
+            for( const auto& pair : interior )
+            {
+                const std::string text = describe( pair.first ) + " / " + describe( pair.second );
+                if( interior.count( pair ) > 1 )
+                    out.interior_problems.push_back( prefix + "duplicate interior " + text );
+                if( not expected_interior.contains( pair ) )
+                    out.interior_problems.push_back( prefix + "unexpected interior " + text );
+            }
+            for( const auto& pair : expected_interior )
+                if( not interior.contains( pair ) )
+                    out.interior_problems.push_back( prefix + "missing interior " + describe( pair.first ) + " / " +
+                                                     describe( pair.second ) );
+
+            for( const ElementKey& k : layout.leaves )
+                if( onInterface( layout, k ) and std::abs( covered[k] - 1.0 ) > geom_tol )
+                    out.problems.push_back( prefix + "fragments cover " + std::to_string( covered[k] ) + " of " +
+                                            describe( k ) + "'s side" );
+            for( const auto& pair : actual )
+            {
+                const std::string text = describe( pair.first ) + " / " + describe( pair.second );
+                if( actual.count( pair ) > 1 ) out.problems.push_back( prefix + "duplicate " + text );
+                if( not expected.contains( pair ) ) out.problems.push_back( prefix + "unexpected " + text );
+            }
+            for( const auto& pair : expected )
+                if( not actual.contains( pair ) )
+                    out.problems.push_back( prefix + "missing " + describe( pair.first ) + " / " +
+                                            describe( pair.second ) );
+        };
+        check( "H1", h1 );
+        check( "H(div)", hdiv );
+        check( "H(curl)", hcurl );
+        return out;
+    }
+
+    std::vector<TwoPatchLayout> interfaceLayouts()
+    {
+        using BP = std::array<std::vector<double>, 2>;
+        const auto bp = []( const std::vector<double>& s, const std::vector<double>& t ) { return BP{ s, t }; };
+        const std::vector<BP> normal = { bp( { 0, 1, 2 }, { 0, 1 } ), bp( { 0, 0.5, 1, 1.5, 2 }, { 0, 1 } ) };
+        const std::vector<BP> tangential = { bp( { 0, 1 }, { 0, 1 } ), bp( { 0, 0.5, 1 }, { 0, 0.5, 1 } ) };
+        const std::vector<BP> non_dyadic = { bp( { 0, 1 }, { 0, 1 } ), bp( { 0, 0.5, 1 }, { 0, 1.0 / 3.0, 1 } ) };
+        const std::vector<BP> three = { bp( { 0, 1 }, { 0, 1 } ),
+                                        bp( { 0, 0.5, 1 }, { 0, 0.5, 1 } ),
+                                        bp( { 0, 0.25, 0.5, 0.75, 1 }, { 0, 0.25, 0.5, 0.75, 1 } ) };
+        const std::vector<ElementKey> fine_p0 = {
+            { 0, 1, 0, 0 }, { 1, 0, 0, 0 }, { 1, 0, 1, 0 }, { 1, 0, 0, 1 }, { 1, 0, 1, 1 } };
+        const std::vector<ElementKey> fine_p1 = {
+            { 0, 0, 0, 0 }, { 1, 1, 0, 0 }, { 1, 1, 1, 0 }, { 1, 1, 0, 1 }, { 1, 1, 1, 1 } };
+        return {
+            { "normal, patch 0 refined",
+              normal,
+              { { 0, 0, 0, 0 }, { 0, 1, 0, 0 }, { 0, 1, 1, 0 }, { 1, 0, 2, 0 }, { 1, 0, 3, 0 } } },
+            { "normal, patch 1 refined",
+              normal,
+              { { 0, 0, 0, 0 }, { 0, 0, 1, 0 }, { 0, 1, 1, 0 }, { 1, 1, 0, 0 }, { 1, 1, 1, 0 } } },
+            { "tangential, patch 0 refined", tangential, fine_p0 },
+            { "tangential, patch 1 refined", tangential, fine_p1 },
+            { "non-dyadic, patch 0 refined", non_dyadic, fine_p0 },
+            { "non-dyadic, patch 1 refined", non_dyadic, fine_p1 },
+            { "three levels, patch 0 refined",
+              three,
+              { { 0, 1, 0, 0 },
+                { 1, 0, 0, 0 },
+                { 1, 0, 1, 0 },
+                { 1, 0, 0, 1 },
+                { 2, 0, 2, 2 },
+                { 2, 0, 3, 2 },
+                { 2, 0, 2, 3 },
+                { 2, 0, 3, 3 } } },
+            { "three levels, patch 1 refined",
+              three,
+              { { 0, 0, 0, 0 },
+                { 1, 1, 0, 0 },
+                { 1, 1, 1, 0 },
+                { 1, 1, 1, 1 },
+                { 2, 1, 0, 2 },
+                { 2, 1, 1, 2 },
+                { 2, 1, 0, 3 },
+                { 2, 1, 1, 3 } } },
+            { "three levels, crossed",
+              three,
+              { { 1, 0, 0, 0 },
+                { 1, 0, 0, 1 },
+                { 1, 0, 1, 1 },
+                { 2, 0, 2, 0 },
+                { 2, 0, 3, 0 },
+                { 2, 0, 2, 1 },
+                { 2, 0, 3, 1 },
+                { 1, 1, 0, 0 },
+                { 1, 1, 1, 0 },
+                { 1, 1, 1, 1 },
+                { 2, 1, 0, 2 },
+                { 2, 1, 1, 2 },
+                { 2, 1, 0, 3 },
+                { 2, 1, 1, 3 } } },
+            { "reversed non-dyadic, patch 0 refined", non_dyadic, fine_p0, true },
+            { "reversed non-dyadic, patch 1 refined", non_dyadic, fine_p1, true },
+        };
+    }
+}
+
+TEST_CASE( "Patch-interface enumeration under asymmetric leaves: preconditions", "[shared_interface_refinement]" )
+{
+    // Hand-counted leaf pairs across the interface and same-level leaf pairs
+    // within a patch; the requested leaves partition each patch.
+    const std::vector<size_t> pairs = { 1, 1, 2, 2, 2, 2, 3, 3, 4, 2, 2 };
+    const std::vector<size_t> interior_pairs = { 2, 2, 4, 4, 4, 4, 6, 6, 12, 4, 4 };
+    const std::vector<TwoPatchLayout> layouts = interfaceLayouts();
+    REQUIRE( layouts.size() == pairs.size() );
+    for( size_t i = 0; i < layouts.size(); i++ )
+    {
+        const TwoPatchLayout& layout = layouts.at( i );
+        INFO( layout.name );
+        for( size_t patch = 0; patch < 2; patch++ )
+        {
+            double area = 0.0;
+            for( const ElementKey& a : layout.leaves )
+            {
+                if( a[1] != patch ) continue;
+                area += measure( boxOf( layout, a ) );
+                for( const ElementKey& b : layout.leaves )
+                    if( b[1] == patch and a != b )
+                        CHECK( overlap( boxOf( layout, a ), boxOf( layout, b ) ) < geom_tol );
+            }
+            const auto& bp = layout.breakpoints.front();
+            CHECK( std::abs( area - ( bp[0].back() - bp[0].front() ) * ( bp[1].back() - bp[1].front() ) ) < geom_tol );
+        }
+        CHECK( patchInterfaceEnumeration( layout ).expected_pairs == pairs.at( i ) );
+        CHECK( expectedInteriorPairs( layout ).size() == interior_pairs.at( i ) );
+    }
+}
+
+TEST_CASE( "Patch-interface enumeration under asymmetric leaves: each leaf pair once, on their common fragment",
+           "[shared_interface_refinement]" )
+{
+    std::vector<std::string> problems;
+    for( const TwoPatchLayout& layout : interfaceLayouts() )
+    {
+        const EnumerationOutcome o = patchInterfaceEnumeration( layout );
+        problems.insert( problems.end(), o.problems.begin(), o.problems.end() );
+    }
+    INFO( joined( problems ) );
+    CHECK( problems.empty() );
+}
+
+// outstanding_issues.txt item 18.  Coarse-fine faces within a patch are not
+// enumerated (item 7).
+TEST_CASE( "Interior enumeration under asymmetric leaves: every same-level leaf pair once, on facing sides",
+           "[shared_interface_refinement]" )
+{
+    std::vector<std::string> problems;
+    for( const TwoPatchLayout& layout : interfaceLayouts() )
+    {
+        const EnumerationOutcome o = patchInterfaceEnumeration( layout );
+        problems.insert( problems.end(), o.interior_problems.begin(), o.interior_problems.end() );
+    }
+    INFO( joined( problems ) );
+    CHECK( problems.empty() );
+}
+
+// Step 6: a level whose breakpoints contradict the integer-ratio child
+// relation.  The coarse s elements [0, 0.5] and [0.5, 1] split into two and
+// four fine elements; the ratio is 3.
+namespace
+{
+    KnotVector openKnots( const std::vector<double>& bp )
+    {
+        std::vector<double> knots{ bp.front(), bp.front() };
+        knots.insert( knots.end(), bp.begin(), bp.end() );
+        knots.insert( knots.end(), { bp.back(), bp.back() } );
+        return KnotVector( knots, 1e-10 );
+    }
+
+    std::string builtSpace( const SplineSpace& ss )
+    {
+        const param::ParametricAtlas& atlas = ss.basisComplex().parametricAtlas();
+        double area = 0.0;
+        for( const Cell& c : topCells( atlas.cmap() ) ) area += atlas.parametricLengths( c ).prod();
+        return "built, leaves cover area " + std::to_string( area ) + ", " + std::to_string( ss.numFunctions() ) +
+               " functions";
+    }
+}
+
+TEST_CASE( "Uneven child counts are rejected when a hierarchy is built", "[shared_interface_refinement]" )
+{
+    const auto coarse = makePatch( { openKnots( { 0, 0.5, 1 } ), openKnots( { 0, 1 } ) }, { 2, 2 } );
+    const auto fine = makePatch( { openKnots( { 0, 0.25, 0.5, 0.6, 0.7, 0.8, 1 } ), openKnots( { 0, 1 } ) }, { 2, 2 } );
+    const auto tpCell = []( const TPSplineSpace& ss, const size_t s ) {
+        const auto& cmap = dynamic_cast<const TPCombinatorialMap&>( ss.basisComplex().parametricAtlas().cmap() );
+        return Cell( flattenFull( cmap, FullyUnflattenedDart( { Dart( s ), Dart( 0 ) } ) ), 2 );
+    };
+    // Coarse-only leaves, and fine leaves at the index children of coarse 0,
+    // which reach s = 0.6 and so overlap coarse 1.
+    const std::vector<std::vector<Cell>> tp_coarse = { { tpCell( *coarse, 0 ), tpCell( *coarse, 1 ) }, {} };
+    const std::vector<std::vector<Cell>> tp_mixed = { { tpCell( *coarse, 1 ) },
+                                                      { tpCell( *fine, 0 ), tpCell( *fine, 1 ), tpCell( *fine, 2 ) } };
+
+    std::vector<std::shared_ptr<const MultiPatchSplineSpace>> mp_levels;
+    std::vector<std::shared_ptr<const VectorConformingMultiPatchSplineSpace>> hdiv_levels;
+    for( const auto& patch : { coarse, fine } )
+    {
+        mp_levels.push_back( std::make_shared<const MultiPatchSplineSpace>(
+            buildH1MultiPatchSplineSpace( { patch, patch }, sMaxToSMin() ) ) );
+        hdiv_levels.push_back( std::make_shared<const VectorConformingMultiPatchSplineSpace>(
+            buildHDivMultiPatchSplineSpace( *mp_levels.back() ) ) );
+    }
+    const auto mpCell = [&]( const size_t level, const size_t patch, const size_t s ) {
+        return patchTopCellAt( levelCMap( *mp_levels.at( level ) ), patch, { s, 0 } );
+    };
+    const std::vector<std::vector<Cell>> mp_mixed = { { mpCell( 0, 0, 1 ), mpCell( 0, 1, 0 ), mpCell( 0, 1, 1 ) },
+                                                      { mpCell( 1, 0, 0 ), mpCell( 1, 0, 1 ), mpCell( 1, 0, 2 ) } };
+
+    std::vector<std::string> problems;
+    const auto attempt = [&]( const std::string& name, const std::function<std::string()>& build ) {
+        try
+        {
+            problems.push_back( name + ": " + build() );
+        }
+        catch( const std::invalid_argument& e )
+        {
+            if( not std::string( e.what() ).contains( "must split into the same number of children" ) )
+                problems.push_back( name + ": throws another invalid_argument: " + e.what() );
+        }
+        catch( const std::exception& e )
+        {
+            problems.push_back( name + ": throws other than invalid_argument: " + e.what() );
+        }
+    };
+    const std::vector<std::shared_ptr<const TPSplineSpace>> tp_levels = { coarse, fine };
+    attempt( "single patch, coarse leaves",
+             [&] { return builtSpace( buildHierarchicalSplineSpace( tp_levels, tp_coarse ) ); } );
+    attempt( "single patch, mixed leaves",
+             [&] { return builtSpace( buildHierarchicalSplineSpace( tp_levels, tp_mixed ) ); } );
+    attempt( "two patches H1, mixed leaves",
+             [&] { return builtSpace( buildHierarchicalSplineSpace( mp_levels, mp_mixed ) ); } );
+    attempt( "two patches H(div), mixed leaves",
+             [&] { return builtSpace( buildHierarchicalSplineSpace( hdiv_levels, mp_mixed ) ); } );
+    INFO( joined( problems ) );
+    CHECK( problems.empty() );
 }

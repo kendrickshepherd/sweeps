@@ -17,6 +17,10 @@ namespace topology
         SmallVector<bool, 2> source_axis_reversed;
     };
 
+    // Throws unless both arrays have rank one or two and the axes form a
+    // permutation.
+    void validateSideCoordinateTransform( const SideCoordinateTransform& transform );
+
     // For destination tangential axis d, with s = source_axis_for_destination[d]
     // and n_s the SOURCE extent of axis s:
     //   j_d = source_axis_reversed[d] ? n_s - 1 - i_s : i_s

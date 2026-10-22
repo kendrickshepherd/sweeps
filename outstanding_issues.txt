@@ -993,10 +993,10 @@ MEDIUM PRIORITY — Architectural / Correctness
      4. Algebraic correctness on Experiment A AND the tangentially refined
         Phase 4a fixture.  [DONE: b783841]
      5. The 3-level support-containment experiment; settle grading as a
-        separate policy.  [DONE with the fix, STEP 5 FIX; uncommitted,
-        awaiting review]
+        separate policy.  [DONE with the fix, STEP 5 FIX: c8a5cad]
      6. Interface fragments and side embeddings; repair one-to-many
-        enumeration.
+        enumeration.  [FIRST HALF: E3 measured, proposal.  SECOND HALF:
+        items 1-6 done, items 16-18 applied; STEP 6 below]
      7. Off-node physical H1, H(div) and H(curl) trace tests.
      8. 2D/3D orientation, refinement-direction, junction and cycle matrix.
      9. A separate discrete-complex gate: composition to zero, plus
@@ -1256,13 +1256,23 @@ MEDIUM PRIORITY — Architectural / Correctness
      Why descent, not a dart-ancestor test per cell, ARGUED-FROM-CODE: a
        dart strictly inside a coarse cell has no ancestor (checkForNoAncestor),
        so such a test sees only cells on the coarse leaf's boundary.
-     What changes, ARGUED-FROM-CODE: the old loop erased only cells covered
-       by a coarser leaf, so new active sets are subsets of the old.  They
-       differ only when a candidate's support meets covered cells none of
-       which is face-adjacent to a level-l leaf; that needs a face, inside
-       the support, between a covered cell and a refined level-l cell, i.e.
-       a leaf-level jump of two or more there.  F1 has such a face, at the
-       interface, but no candidate's support crosses it.
+     What changes, ARGUED-FROM-CODE, under a valid nested leaf partition
+       and relative to the former face-neighbour algorithm: the old loop
+       erased only the face-adjacent subset of the level-l cells covered by
+       a coarser leaf; the new helper erases all such covered cells.  So new
+       active sets are subsets of the old.  They differ only when a
+       candidate's support meets covered cells none of which is
+       face-adjacent to a level-l leaf; that needs a face, inside the
+       support, between a covered cell and a refined level-l cell, i.e. a
+       leaf-level jump of two or more there.  The jump is necessary, not
+       sufficient: F1 has such a face, at the interface, but no candidate's
+       support crosses it.
+     REVIEWED (2026-10-20): implementation approved for commit; descent,
+       template parameters as the adapter, and baseline-before-optimization
+       all approved.  The descent materializes the background cells under
+       coarse leaves for every target level; caching per-level coverage is
+       a possible later optimization, gated on profiling.  The user reran
+       the suite: 224/224.
      Single-patch F2, MEASURED.  test/HierarchicalTPSplineSpace_test.cpp,
        "Three levels, jump 2 inside a patch: THB active functions": the same
        patch-0 layout on one patch, hand-derived active sets (level 0 s-index
@@ -1300,6 +1310,285 @@ MEDIUM PRIORITY — Architectural / Correctness
        (now MEASURED); "Not committed" (commit step 5 with this fix).
      Limits: 2D, one refined direction, jumps of two only; no 3D or
        jump-three fixture.
+   STEP 6, FIRST HALF (2026-10-20): measurement and proposal.  No
+   production code changed.
+     E3, MEASURED (supersedes the two-fixture probe in OPEN HAZARD (E3)).
+       test/SharedInterfaceRefinement_test.cpp, "Patch-interface
+       enumeration under asymmetric leaves: each leaf pair once",
+       [known-defect][!shouldfail], with a passing "preconditions"
+       companion (the leaves partition both patches; hand-counted expected
+       pairs 1, 1, 2, 2, 2, 2, 3, 3, 4; 260 assertions).  Nine two-patch
+       layouts, patch 0's s-max glued to patch 1's s-min, t unreversed:
+       normal-only (Experiment A), tangential (Phase 4a), non-dyadic
+       tangential (level-1 t knot at 1/3) and three-level mixed, each
+       with patch 0 or patch 1 refined, plus three levels crossed (each
+       patch finer on a different half of the interface).  Expected pairs
+       come from the hand-written breakpoints alone: a patch-0 leaf on
+       s-max and a patch-1 leaf on s-min pair iff their t-intervals
+       overlap.  Run for H1, H(div) and H(curl), with identical results:
+       every record pairs a patch-0 interface leaf with the same-level
+       patch-1 cell, which in all nine layouts is not a leaf; no expected
+       pair appears; traceInterfaceElement throws "unrefinedAncestorDart-
+       OfCell requires a leaf dart as input" on every record.  Where
+       patch 1 is the finer side its fine leaves never appear at all.
+     PROPOSAL, to be agreed before TraceMesh.hpp/.cpp change.
+       Record.  Each patch-interface record becomes one FRAGMENT: the finer
+         of its two leaf sides.  TraceMeshSide gains an embedding; no
+         parallel type (the reasoning of approved choice 2, applied here:
+         another type would add machinery without separation; consumers
+         keep traceInterfaceElement(ss, iface)):
+           struct TraceSideEmbedding { SmallVector<size_t, 2> source_axis;
+             SmallVector<bool, 2> reversed;
+             SmallVector<double, 2> offset, scale; };
+           y_k = offset_k + scale_k * (reversed_k ? 1 - xi_j : xi_j),
+             j = source_axis_k,
+         mapping fragment coordinates xi in [0,1]^(d-1) to the side's unit
+         tangential coordinates (tangentialAxes order).  The fragment frame
+         is the first side's cell at the fragment level, so the first side
+         has identity axes.  A free function embeds a point.  Boundary and
+         same-level interior records get the whole-side embedding.
+       Why a full signed permutation per side, not a box plus
+         iface.permutation: each side is self-contained, and no consumer
+         composes the affine part with sideCoordinateTransform by hand,
+         where permute-then-scale against scale-then-permute is the error.
+       Enumeration, downward traversal (approved choice 1).  Per connection
+         with first < second, for each level-0 cell on the first side,
+         pair it with the second side's cell by the level-0 transform.  At
+         each level note the first leaf met on each side (sideLeafIndices);
+         when both sides have one, emit a record whose fragment is the
+         current level cell; otherwise descend the first side's children on
+         the side (iterateChildren) and pair each by that level's
+         transform.  Leaves partition each patch, so this terminates;
+         reaching the finest level without both leaves throws (DEFENSIVE).
+       Embeddings from actual intervals.  Per tangential axis, offset =
+         (fragment start - leaf start) / leaf length and scale = fragment
+         length / leaf length, from each level's MultiPatchParametric-
+         Atlas, always within one patch.  The only cross-patch step is the
+         fragment-level signed permutation, the cell-wise affine
+         correspondence that today's same-level pairing already assumes.
+         Never from refinement ratios: the non-dyadic layouts discriminate
+         (index ratio gives offsets 0 and 1/2, intervals give 0 and 1/3).
+       Guard (DEFENSIVE): throw if a fragment box leaves its leaf box,
+         beyond tolerance.  See OPEN GAP (child relation) below.
+     CONTRACT CHANGE, not mechanical:
+       - Under asymmetric leaves patchTraceMeshInterfaces' records and
+         their count change: non-leaf partners become one record per
+         fragment, and first.level may differ from second->level.
+       - Under level-matched leaves the set is unchanged but the order
+         goes from level-major to level-0-ancestor-major.  ARGUED-FROM-
+         CODE: single-level output is unchanged, order included.  Phase0
+         and RowD call observeInterfaces only on single-level spaces;
+         TraceMesh_test's hierarchical case has one record; Stage1 builds
+         maps, so order does not matter there.
+       - TraceMeshSide gains a field.  Only TraceMesh.cpp constructs it.
+       - Two new DEFENSIVE throws (above).
+       - LevelTraceMesh gains a raw atlas pointer, with the lifetime
+         pattern of item 5.
+     PLAN AFTER AGREEMENT.  Implement; drop both tags.  Add per-record
+       embedding checks against the hand-written intervals: mapping
+       xi = 0 and 1 through each side's embedding into its leaf's
+       t-interval gives the same t-interval on both sides; per interface
+       leaf the fragment scales sum to one (covered once); the finer side
+       has the whole-side embedding.  Bypass probes: the old enumeration
+       fails the test; ratio-derived embeddings fail only the non-dyadic
+       layouts.  Then TraceMesh 114, Phase0 164, RowD and Stage1 unchanged,
+       full suite.
+     OPEN GAP, pre-existing, ARGUED-FROM-CODE (found while reading).
+       HierarchicalTPCombinatorialMap derives children by an integer
+       ratio per level and direction (element e at level l has children
+       e*r .. e*r + r - 1), checking only divisibility of element counts
+       ("assuming uniform refinement only").  Nested knot vectors whose
+       coarse elements split into different numbers of fine elements pass
+       that check: coarse {0, 0.5, 1} and fine {0, 0.25, 0.5, 0.6, 0.7,
+       0.8, 1} give ratio 3, and the index children of [0, 0.5] include
+       [0.5, 0.6].  With interval-derived embeddings the guard above turns
+       that into a throw at trace enumeration rather than a misplaced
+       fragment.  Whether the space constructors already reject it is
+       UNMEASURED; step 5's activity descent inherits the same relation.
+     Limits: 2D and non-reversing interfaces only; reversal and 3D axis
+       swaps are SEQUENCE 8.  Same-patch coarse-fine interior traces (item
+       7) stay deferred, but the same embedding would serve them.
+   STEP 6, SECOND HALF (2026-10-20): order items 1-5 implemented and
+     measured.  Item 6 (drop the last tag, full suite) waits on the
+     leaf-dart decision at the end.  Nothing committed.
+     REVIEW OF THE PROPOSAL (user), approved with revisions:
+       - TraceSideEmbedding { SideCoordinateTransform axes; offset;
+         scale }: y_d = offset_d + scale_d * (r ? 1 - xi_s : xi_s),
+         s = axes.source_axis_for_destination[d], r its reversal.
+       - Validated centrally: a permutation, finite, positive scales,
+         fragment inside its leaf side; boundary and interior records
+         embed whole sides by the identity.
+       - Each patch record is a "common interface fragment", found by a
+         paired downward traversal.
+       - Pin the single-level order directly; add one reversed,
+         asymmetric 2D interface now.
+       - traceInterfaceElement keeps returning whole-leaf-side data and
+         does not apply the embedding (documented in TraceMesh.hpp).
+       - Uneven child counts are rejected authoritatively by the
+         HierarchicalTPParametricAtlas constructor; non-dyadic sizes
+         pass.  TraceMesh keeps a fragment-in-leaf check as DEFENSIVE.
+     1. UNEVEN CHILDREN, MEASURED before any change (SharedInterface
+        Refinement_test "Uneven child counts are rejected when a
+        hierarchy is built"; coarse s {0, 0.5, 1}, fine s {0, 0.25,
+        0.5, 0.6, 0.7, 0.8, 1}, ratio 3).  Every build succeeded:
+          single patch, coarse leaves         area 1.0, 12 functions
+          single patch, mixed leaves          area 1.1, 18 functions
+          two patches H1, mixed leaves        area 2.1, 27 functions
+          two patches H(div), mixed leaves    area 2.1, 42 functions
+        The index children of [0, 0.5] reach 0.6, so mixed leaves
+        overlap by 0.1.  The OPEN GAP above was real and no space
+        constructor rejected it.
+     2. ATLAS VALIDATION (HierarchicalTPParametricAtlas.cpp,
+        validateChildIntervals).  Per level and direction, fine
+        elements e*r .. e*r + r - 1 must tile coarse element e in
+        order, to 1e-10 of the coarse length.  CONTRACT CHANGE: such
+        input now throws invalid_argument "... every coarse element
+        must split into the same number of children." at construction,
+        where it used to build.  Three more throws (atlas count,
+        tensor-product components, element counts) are unreachable
+        through the library's two construction sites, which build the
+        atlas from the levels that built the map (ARGUED-FROM-CODE); a
+        direct constructor call with mismatched levels now throws too.
+        HierarchicalTPPAtlas_test accepts unequal nested lengths (2D
+        and 3D, with a 1/3 breakpoint) and rejects four cases (uneven
+        split, 0.5 not a fine breakpoint, longer fine domain, a
+        volume's third direction).  All four rejections failed without
+        the validation (MEASURED).  The step-1 test passes, untagged.
+     3. EMBEDDING (TraceMesh.hpp/.cpp).  TraceSideEmbedding,
+        wholeTraceSideEmbedding, validateTraceSideEmbedding,
+        embedTraceFragmentPoint (permute and reverse, then the affine
+        map) and validateTraceMeshInterface; validateSideCoordinate
+        Transform became public, messages unchanged.  TraceMeshSide
+        gains `embedding`; LevelTraceMesh gains hierarchy and atlas
+        pointers.  CONTRACT CHANGE, new throws (invalid_argument
+        unless noted):
+          "Trace side embedding offset and scale must match the axis
+            rank." / "... must be finite." / "... scales must be
+            positive." / "... places the fragment outside its leaf
+            side."
+          "Trace record sides have embeddings of different rank."
+          "Boundary and interior trace records must embed whole sides
+            by the identity."
+          "A patch interface trace record needs a second side and a
+            permutation."
+          "A patch interface fragment must use the first side's axes
+            and the interface transform."
+        Each enumeration validates its records, so through enumeration
+        all of these are DEFENSIVE (ARGUED-FROM-CODE; the gates below
+        never see one); called directly they are the validators'
+        contract, and TraceMesh_test hits each one.
+     4. TRAVERSAL.  patchTraceMeshInterfaces descends from each level-0
+        interface cell through same-side children (iterateChildren),
+        keeping the first leaf met on each side; where both sides have
+        one it emits the common fragment, embedded into each leaf from
+        atlas intervals.  New runtime_errors, all DEFENSIVE (ARGUED-
+        FROM-CODE): "A patch interface cell has no leaf on one of its
+        sides." (leaves tile the domain); "Trace mesh refinement levels
+        have no hierarchy." / "... have no matching parametric atlas."
+        (single-level spaces never descend; no gate reaches the atlas
+        throw).
+     5. GATES.
+        ORDER PIN (TraceMesh_test "Single-level patch-interface
+        enumeration order is pinned", 3D pair and 2D row of three):
+        written and passed on the pre-step-3 code first (12
+        assertions, MEASURED), then extended with whole-side embedding
+        strings.  Single-level order is unchanged.
+        FORMULA AND REJECTIONS (TraceMesh_test): hand-computed points
+        for a swapped, reversed, scaled rank-2 embedding and a reversed
+        rank-1 one; every embedding and record throw above is hit.
+        TraceMesh_test 172 assertions in 8 test cases.
+        SharedInterfaceRefinement_test aggregate, now 11 layouts x
+        H1/H(div)/H(curl), including "reversed non-dyadic, patch 0/1
+        refined" (s-max to s-max, Flip1d, patch 1's t breakpoints
+        mirrored).  Per record: rank 1, the finer side whole, and
+        xi = 0, 0.25, 1 through each side's embedding lands at the
+        hand-written fragment's t in patch 0; per interface leaf the
+        fragments cover the side exactly once.
+        BYPASS PROBES (each MEASURED, then restored byte-identical):
+          affine before reversal: TraceMesh_test 4 failed assertions;
+            SIR 18 problems, all in the reversed layout whose coarse
+            side is reversed (2 records x 3 points x 3 spaces).
+          index-ratio offsets: TraceMesh_test passes; SIR 48 problems,
+            all in the four non-dyadic layouts, plain and reversed.
+          old same-level enumeration: every one of the 11 layouts fails.
+        Current: Atlas 84, TraceMesh 172, Phase0 164, RowD 10959, Stage1
+        3163 assertions pass; SIR 7 cases, 6 pass and the aggregate
+        fails as expected.
+     LEAF-DART DEFECT, MEASURED, pre-existing.  Only in "three levels,
+       crossed", all three spaces.  Records name an element by the
+       DartPos0 dart that localCellOnSide builds.  For the level-1 leaf
+       p0 (1,1), whose lower-t side is split by patch 0's level-2
+       leaves and whose interface side by patch 1's, that dart is not a
+       leaf dart, so every consumer that calls unrefinedAncestorDart
+       OfCell throws "unrefinedAncestorDartOfCell requires a leaf dart
+       as input".  Which split side carries the dart is UNMEASURED.
+       With a leaf-dart gate added to SIR and the current TraceMesh.cpp,
+       its boundary record (side 2, its upper-t side, itself unsplit)
+       and both of its patch records fail.  The boundary enumeration
+       was validated earlier, so the defect predates step 6; step 6
+       only made the patch records reach it.  The cause is to_space_
+       cell in levelTraceMeshes, which maps that dart into the space
+       without checking that it is a leaf dart.
+     CANDIDATE FIX, measured and restored, AWAITING AGREEMENT (a patch
+       in the session scratchpad, not in the tree).  to_space_cell keeps
+       the old dart when it is a leaf dart; otherwise it uses the
+       element's lowest-id leaf dart, from a map built once per
+       levelTraceMeshes call.  New runtime_error "Trace mesh element is
+       not a leaf." is DEFENSIVE: every looked-up cell comes from
+       leafElements, which walks the same leaf cells as the map.
+       SIR's keyOf decodes through unrefinedAncestorDartOfCell, and a
+       new gate requires every boundary, interior and patch side to be
+       named by a leaf dart of the right level and patch.
+       MEASURED with it: the aggregate passes (still reported as
+       "failed" under its [!shouldfail] tag), as do Phase0, Stage1,
+       RowD, TraceExtraction, TraceMesh, HierarchicalMultiPatchSpline
+       Space, both VectorConforming suites, HierarchicalTPPAtlas and
+       HierarchicalMultiPatchCMap.  The full ctest has not been run
+       with it.
+       ARGUED-FROM-CODE: a record whose old dart was a leaf dart is
+       unchanged, so only records whose consumers threw change.
+       traceSideData does not depend on which leaf dart names an
+       element: every wrapper reduces it to a patch-local cell, and the
+       TP level reads only the cell (unflattenCell drops the dart
+       position).
+       CONTRACT CHANGE: TraceMeshSide.element for hierarchical spaces
+       becomes "a leaf dart of the leaf element", possibly a finer-
+       level dart when no own-level dart is a leaf; it edits the
+       validated levelTraceMeshes shared by boundary and interior
+       records.  UNMEASURED in 3D.
+     Limits: reversal is now covered in 2D; 3D asymmetric interfaces
+       and axis swaps stay SEQUENCE 8.  The rank-2 embedding is unit-
+       tested only.  SmallVector capacity 2 caps embeddings at rank 2.
+     REVIEW OF THE LEAF-DART FIX (user, 2026-10-21).  The defect is
+       confirmed and correctly localized; the candidate is approved with
+       three hardening additions, and the review found an independent
+       validator hole.  Recorded as items 16 (defect and fix) and 17
+       (validator) and as outstanding_mathematics.txt M12 (invariance),
+       so each can be processed on its own.  Order item 6 follows 16-17.
+     LEAF-DART FIX APPLIED (2026-10-21, uncommitted).  Items 16 and 17
+       are applied as approved; measurements are recorded there.  Order
+       item 6 is done: the aggregate SIR [known-defect][!shouldfail] tag
+       is removed, SIR passes (10249 assertions in 7 cases), and the
+       focused suites and the full ctest pass (item 16, APPLIED).
+       Item 16's 3D gate also found item 18: a pre-existing interior
+       enumeration omission outside the approved fix.  It is pinned by
+       its own [known-defect][!shouldfail] case and its fix was AWAITING
+       AGREEMENT (since applied, below).  It concerns same-level interior
+       records, not step 6's fragments; whether it blocks step 7 is the
+       user's call.
+       Formatting only: 10 lines over the 120-column limit added by
+       uncommitted step-6 work are wrapped (TraceMesh.cpp 7, TraceMesh
+       _test.cpp 2, SIR 1).  TraceMesh.cpp's one 125-column line, a
+       throw in levelTraceMeshes, predates step 6 and is left as it is.
+     ITEM 18 APPLIED (2026-10-22, uncommitted).  The user approved fix
+       (i) with four refinements and ruled that step 6 is not ready to
+       commit until it lands.  It has landed (item 18, APPLIED): same-
+       level interior records are complete, their side order is
+       specified (first side on the max side), the last [known-defect]
+       case is gone, and the focused suites and the full ctest pass.
+       Step 6 is ready to commit, after the separate step-5 ledger
+       follow-up.  Coarse-fine interior fragments within a patch remain
+       item 7.
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces
@@ -1671,3 +1960,318 @@ MEDIUM PRIORITY — Found 2026-10-07
     CONSEQUENCE FOR THE TESTS: step 9's find_change gate sweeps a UNIFORMLY
     refined patch, where all 144 classes are conforming.  A patch refined along
     one axis only would spend 96 of its 144 classes on invalid input.
+
+
+-------------------------------------------------------------------------------
+BLOCKING ITEM 1 STEP 6 — Found 2026-10-20, reviewed 2026-10-21
+-------------------------------------------------------------------------------
+
+16. Hierarchical Trace Records Can Name A Leaf By A Non-Leaf Dart
+    File(s): src/basis/TraceMesh.cpp  levelTraceMeshes() (to_space_cell),
+             localCellOnSide();  the rejection is in
+             src/topology/HierarchicalTPCombinatorialMap.cpp
+             unrefinedAncestorDartOfCell()
+
+    Status: MEASURED 2026-10-20, pre-existing.  Fix reviewed and APPROVED
+    2026-10-21 with additions b-d below; APPLIED the same day (uncommitted,
+    see APPLIED at the end of this item).  Item 1 step 6's last
+    [known-defect] tag is removed.
+
+    THE DEFECT.  A hierarchical top-dimensional leaf can hold darts from
+    several refinement levels: where finer neighbouring leaves subdivide one
+    of its sides, its own-level darts on that side are replaced by finer
+    leaf descendants and stop being leaf darts.  Trace records name an
+    element by the level-space representative that localCellOnSide builds
+    (the DartPos0 dart), and to_space_cell maps it into the hierarchical map
+    unchecked.  That representative identifies the right background element,
+    but it need not be a leaf dart and need not lie on the traced side, so
+    refinement on ANY side of the element can invalidate it.
+    unrefinedAncestorDartOfCell then throws "unrefinedAncestorDartOfCell
+    requires a leaf dart as input" in every consumer that starts from it:
+    parentBasis, connectivity, extractionOperator and the parametric
+    interval queries, hence traceSideData and traceInterfaceElement.
+
+    MEASURED (SharedInterfaceRefinement_test, layout "three levels,
+    crossed", H1, H(div) and H(curl) alike).  The level-1 leaf p0 (1,1) has
+    its lower-t side split by patch 0's level-2 leaves and its interface
+    side split by patch 1's.  Its boundary record (side 2, its upper-t side,
+    itself unsplit) and both of its patch records name it by a non-leaf
+    dart; no other record in the 11 layouts does.  Which split side the
+    representative lies on is UNMEASURED.  The boundary enumeration was
+    validated earlier, so the defect predates step 6; step 6 only made the
+    patch records reach it.
+
+    KEEP THE STRICTNESS.  unrefinedAncestorDartOfCell's rejection is correct
+    and valuable: relaxing it would accept genuinely non-leaf background
+    cells and hide enumeration defects.  The fix belongs at the
+    levelTraceMeshes conversion boundary.  Add no public topology API for
+    the inverse conversion until a second consumer needs one.
+
+    FIX, APPROVED 2026-10-21.  Item a was measured and restored on
+    2026-10-20 (item 1, STEP 6, SECOND HALF); the review added b-d.
+      a. to_space_cell keeps the mapped dart when it is a leaf dart.
+         Otherwise it substitutes a leaf-dart representative of the same
+         element, from a lookup built once per levelTraceMeshes call from
+         the actual hierarchical leaf cells, keyed by level, patch and
+         tensor-product element indices (independent of dart position).
+         Records that are usable today are unchanged.  A missing key throws
+         runtime_error "Trace mesh element is not a leaf." (DEFENSIVE).
+      b. The contract says "a leaf-dart representative", not "the lowest-id
+         leaf dart".  Leaf-cell iteration happens to visit ascending ids,
+         but that is not its contract.  CHOSEN (the review allowed either):
+         promise no particular representative, since M12 argues none
+         changes the trace algebra; enforce a minimum only if a consumer
+         needs a canonical one.  A duplicate key throws (DEFENSIVE; it is
+         impossible in a valid hierarchy) instead of map::emplace silently
+         keeping the first entry.
+      c. Document the contract on TraceMeshSide.element in TraceMesh.hpp: in
+         a hierarchical space the element is named by a leaf dart, which may
+         belong to a finer refinement level than `level`; `level` names the
+         element's unrefined ancestor.  This stops callers decoding the
+         dart's storage level, the mistake SIR's old keyOf made.
+      d. One 3D representative gate: a 3D hierarchical leaf with a face
+         subdivided by neighbouring finer leaves.  Every boundary, interior
+         and patch record must be accepted by unrefinedAncestorDartOfCell,
+         resolve to the expected patch, level and element, and produce
+         traceSideData.  The fixture must first be shown to exercise the
+         conversion: on the unfixed code at least one of its records must
+         name its element by a non-leaf dart.  Full 3D coarse-fine embedding
+         and orientation coverage stays SEQUENCE 8.
+      e. Test side: SIR's keyOf decodes through unrefinedAncestorDartOfCell,
+         and a gate requires every boundary, interior and patch side to be
+         named by a leaf dart of the right level and patch.
+      Then remove the aggregate SIR [known-defect][!shouldfail] tag and run
+      the focused suites and the full ctest.
+
+    CONTRACT CHANGE, not mechanical.  For hierarchical spaces,
+    TraceMeshSide.element changes from "the level-space representative
+    mapped into the hierarchy" to "a leaf-dart representative of the leaf
+    element".  The edit is in levelTraceMeshes, which boundary and interior
+    records share with patch records.  Two new DEFENSIVE throws (a, b).
+
+    DOWNSTREAM INVARIANCE: outstanding_mathematics.txt M12, ARGUED-FROM-CODE.
+    The review concurs; a concurrence is not a measurement.
+
+    APPLIED 2026-10-21, uncommitted, as a-e above.
+      a, b. TraceMesh.cpp levelTraceMeshes: the leaf-dart lookup, and the
+         duplicate-key runtime_error "Two leaf cells name the same trace
+         mesh element." (DEFENSIVE).
+      c. TraceMesh.hpp: the contract comment on TraceMeshSide.element.
+      d. TraceMesh_test "3D trace records name a leaf with subdivided
+         faces by a leaf dart".  Two 2x2x2 degree-2 patches, patch 0's
+         s-max side glued to patch 1's s-min side.  Patch 0 keeps (1,0,0)
+         coarse and refines the rest; patch 1 refines only (0,0,0).  The
+         expected records are built from the leaf set alone: 100 boundary
+         (boundary area 10) and 16 patch records.
+         MEASURED ON THE UNFIXED CODE, identical for H1, H(div), H(curl):
+         6 boundary and 12 patch records name their element by a non-leaf
+         dart, all of them on p1 L0 (0,0,1), (0,1,0) and (0,1,1), the
+         coarse neighbours of patch 1's refined corner.  So the fixture
+         does exercise the conversion.
+         MEASURED WITH THE FIX, in all three spaces: every boundary,
+         interior and patch record is named by a leaf dart of its level
+         and patch, names an expected leaf, and gives traceInterface
+         Element non-empty connectivity on each side.  The boundary and
+         patch records match the expected sets exactly.  Interior
+         completeness is a separate case, because of item 18.
+      e. SIR: keyOf decodes through unrefinedAncestorDartOfCell, and the
+         leaf-dart gate covers boundary, interior and patch sides.
+      The aggregate SIR tag is removed.  MEASURED 2026-10-21: SIR 10249
+      assertions in 7 cases; TraceMesh 187 in 10 (3 failing as expected,
+      all in item 18's case); Phase0 164; RowD 10959; Stage1 3163;
+      TraceExtraction 64; HierarchicalTPPAtlas 84; HierarchicalTPCMap
+      21237; HierarchicalMultiPatchCMap 20307; MultiPatchCMap 142;
+      HierarchicalTPSplineSpace 48; HierarchicalMultiPatchSplineSpace 54;
+      VectorConformingHierarchicalMultiPatchSplineSpace 387;
+      VectorConformingMultiPatchSplineSpace 334; all pass.  Full ctest:
+      234/234 pass (143.8 s).  It ran before a whitespace-only wrap of one
+      SIR line; SIR was rebuilt and rerun after it (10249, pass).
+      M12 is unchanged in class: the 3D gate shows trace data is produced
+      for the substituted representatives, not that it equals the data of
+      another representative.
+
+
+17. validateTraceMeshInterface Does Not Enforce Record Shape
+    File(s): src/basis/TraceMesh.cpp  validateTraceMeshInterface()
+
+    Status: ARGUED-FROM-CODE 2026-10-21, found in review; independent of 16.
+    Fix APPROVED and APPLIED the same day (uncommitted, see APPLIED below).
+
+    For Boundary and Interior records the validator checks only that each
+    side present embeds its whole side by the identity.  It never checks
+    which sides and fields are present, so a Boundary record with a second
+    side, an Interior record without one, or either with a permutation,
+    passes whenever its embeddings are whole-side identities.  Such a
+    Boundary record also disagrees with isBoundary(), which reads only the
+    second side.  The enumerations build the right shapes, so no enumerated
+    record is affected (ARGUED-FROM-CODE); the hole is in the public
+    validator's assurance.
+
+    FIX: enforce
+      Boundary         no second side and no permutation
+      Interior         a second side and no permutation
+      PatchInterface   a second side and a permutation (already enforced)
+    with a TraceMesh_test rejection for each new case, each measured as
+    accepted before the change.  CONTRACT CHANGE: the public validator
+    accepts fewer records.  Through enumeration the new throws are
+    DEFENSIVE.
+
+    APPLIED 2026-10-21, uncommitted.  MEASURED before the change: all four
+    new cases in TraceMesh_test "Malformed..." were accepted (a Boundary
+    record with a second side, a Boundary record with Flip1d, an Interior
+    record without a second side, an Interior record with Flip1d).  With
+    the change each throws invalid_argument with its shape message, and
+    the enumerations' records still validate (all suites above pass).
+
+
+18. Interior Enumeration Omits Same-Level Pairs Of Leaves Not Stored By
+    Their DartPos0 Dart
+    File(s): src/basis/TraceMesh.cpp  interiorTraceMeshInterfaces(),
+             patchLeafSet();  src/basis/TraceExtraction.cpp
+             adjacentElementSide();  topology::leafElements()
+
+    Status: symptom MEASURED 2026-10-21 by item 16's 3D gate; cause
+    ARGUED-FROM-CODE, with one prediction checked.  Pre-existing: the same
+    two records are missing on the code before item 16's fix.  Fix (i)
+    APPROVED 2026-10-22 with four refinements and APPLIED the same day,
+    uncommitted (REVIEW and APPLIED below).  The [known-defect]
+    [!shouldfail] case that pinned it is merged into item 16's 3D gate.
+
+    MEASURED (H1, H(div) and H(curl) alike).  In item 16's 3D fixture the
+    interior enumeration silently omits two same-level records:
+      L0 p1 (0,0,1) side 2 / L0 p1 (0,1,1) side 3
+      L0 p1 (0,1,0) side 4 / L0 p1 (0,1,1) side 5
+    Every other expected interior record is present, and none is extra.
+
+    CAUSE (ARGUED-FROM-CODE).  The enumeration compares level cells, and
+    Cell compares by dart id, so the comparison depends on which dart
+    names an element.
+      - leafElements stores each leaf by the level dart of whichever leaf
+        dart the cell iteration reaches; patchLeafSet keys on that dart.
+      - adjacentElementSide names the neighbour by its DartPos0 dart.
+    So "is the neighbour a leaf" succeeds only when the neighbour is
+    stored by its DartPos0 dart.  From either leaf of a pair, the pair is
+    found iff the OTHER leaf is stored by its DartPos0 dart.  seen_pairs
+    cannot then record one pair twice under different keys, since that
+    needs both lookups to succeed, and then both keys agree.  A pair is
+    therefore lost iff neither leaf is stored by its DartPos0 dart.
+    CORRECTED 2026-10-22: a sentence here said this includes every leaf
+    whose DartPos0 dart is not a leaf dart.  Not shown: the stored dart
+    is the own-level ancestor of the leaf dart reached, and nothing
+    excludes that ancestor being the DartPos0 dart when the DartPos0 dart
+    is not itself a leaf dart.  Which leaves are stored off their DartPos0
+    dart is known only through the prediction below.  The fix compares
+    keys, not darts, so neither question bears on it.
+    PREDICTION CHECKED: item 16's unfixed measurement found exactly three
+    leaves named by non-leaf DartPos0 darts, p1 L0 (0,0,1), (0,1,0) and
+    (0,1,1).  Their face-adjacent pairs are exactly the two missing
+    records; (0,0,1) and (0,1,0) are not face-adjacent.
+
+    CONSEQUENCE (ARGUED-FROM-CODE).  Every consumer of interior records
+    skips these interfaces, including InteriorTraceMode::Broken, so a
+    broken row there would go unreported by the conformity diagnostics.
+    2D: MEASURED 2026-10-22, narrowly: on the unfixed code SIR's 11
+    layouts omit no pair (APPLIED, step 2).  Single-level spaces:
+    UNMEASURED directly; the single-level suites pass with the fix.
+
+    CANDIDATE FIXES.  (i) APPROVED 2026-10-22.
+      (i) RECOMMENDED.  Key patchLeafSet and seen_pairs by levelElementKey
+          (level, patch, element indices) instead of by Cell.  The change
+          is local to interiorTraceMeshInterfaces, reuses the key item 16
+          introduced, and leaves the boundary and patch enumerations alone.
+      (ii) Store DartPos0 level darts in LevelTraceMesh.leaf_elements.  This
+          also removes any other dart-sensitive comparison, but it changes
+          what every enumeration starts from, including the validated
+          boundary and patch paths.
+    GATE: drop the 3D case's tag; first add a 2D interior completeness
+    check on SIR's layouts, measured before the fix; then run the full
+    suite.
+    CONTRACT CHANGE, not mechanical: interiorTraceMeshInterfaces returns
+    more records for affected hierarchies, and Broken mode may then report
+    rows it now misses.
+
+    REVIEW (user, 2026-10-22).  Fix (i) approved with four refinements:
+      1. one named LevelElementKey alias and one helper for the current
+         leaf, the adjacent leaf and the pair key;
+      2. a 2D completeness test, added before the fix, whose expected
+         same-level neighbours come from the declared leaves'
+         geometry, not from adjacentElementSide;
+      3. separate bypass probes: revert leaf membership (missing records
+         must return); revert pair suppression (duplicates must appear);
+      4. measure whether an existing interior record's first and second
+         sides change, then either document the order as unspecified or
+         canonicalize it deliberately, never let it change by accident.
+    Scope: this repairs completeness for same-level leaf neighbours.  It
+    does not enumerate coarse-fine interior fragments within a patch;
+    that remains the interior-refinement work (item 7).  Step 6 is not
+    ready to commit until this lands.
+
+    APPLIED 2026-10-22, uncommitted.
+      1. TraceMesh.cpp: LevelElementKey names what levelElementKey
+         returns, and item 16's leaf_dart_of uses it.  levelLeafKeys
+         replaces patchLeafSet.  interiorTraceMeshInterfaces keys leaf
+         membership and seen_pairs by LevelElementKey for the current
+         leaf, the adjacent leaf and the pair alike.
+      2. SIR "Interior enumeration under asymmetric leaves: every same-
+         level leaf pair once, on facing sides".  Expected pairs come
+         from the layout's leaf boxes (facingSide, expectedInterior
+         Pairs); the preconditions case pins their count per layout
+         (2, 2, 4, 4, 4, 4, 6, 6, 12, 4, 4).  Each record must name
+         expected leaves on facing sides, first side on a max side, each
+         pair once, and no expected pair may be missing.
+         MEASURED ON THE UNFIXED CODE: it passes (SIR 10261 assertions in
+         8 cases), so SIR's 11 layouts expose no omission.  It is a
+         regression check, not a reproduction; the 3D gate reproduces.
+      3. PROBES, each applied to the fixed file, then restored and
+         checked byte-identical by cmp.  H1, H(div), H(curl) alike.
+           P1 membership by dart-id Cell again: the 3D gate fails with
+              exactly the two missing records above.  The 2D case
+              passes, as 2 predicts.
+           P2 seen_pairs by dart-id Cell again: the 3D gate fails with
+              five duplicated records, every same-level leaf pair that
+              includes p1 L0 (0,0,1), (0,1,0) or (0,1,1).  The 2D case
+              fails with a duplicate p0 L1 (0,1) / p0 L1 (1,1) in
+              "three levels, crossed" (item 16's leaf).
+           P3 leaf-first side order again: both cases pass (see 4).
+      4. SIDE ORDER, MEASURED by dumping every interior record that
+         TraceMesh_test and SIR emit, before and after the fix
+         (temporary instrumentation, removed).  Before: every record has
+         its first side on a max side except L1 p0 (1,1) side 1 /
+         L1 p0 (0,1) side 0 in "three levels, crossed" (18 dump lines),
+         the pair the defect could find only from (1,1).  After: that
+         record reads L1 p0 (0,1) side 0 / L1 p0 (1,1) side 1, the 3D
+         gate's two recovered records are added, nothing else changes,
+         and 0 of 1792 records start on a min side.
+         DECISION: canonicalize.  The first side is the max side of the
+         shared face (TraceMesh.hpp doc); the SIR case and the 3D gate,
+         whose interior comparison is now ordered, pin it.
+         P3 shows the rule is DEFENSIVE: on every fixture the lower leaf
+         is reached first, so leaf-first order gives the same records.
+         The flip above comes from the repaired membership, not from the
+         rule.  The pins guard the documented order, but no fixture
+         tells the rule from iteration order.
+      5. TraceMesh_test: the [known-defect][!shouldfail] case is removed.
+         The 3D gate requires its boundary, interior and patch
+         differences all empty, and pins 141 expected interior records
+         (9 in p1 at level 0; 120 in p0 and 12 in p1 at level 1).  No
+         test case carries [known-defect] or [!shouldfail].
+      6. Consumers (ARGUED-FROM-CODE): only traceMeshInterfaces, which
+         appends, and tests call interiorTraceMeshInterfaces.  The Broken
+         filter, traceHasBrokenRows, is symmetric in its two sides.
+      SUITES, MEASURED 2026-10-22 with the fix: TraceMesh 185 in 9;
+      SIR 10261 in 8; Phase0 164; RowD 10959; Stage1 3163;
+      TraceExtraction 64; HierarchicalTPPAtlas 84; HierarchicalTPCMap
+      21237; HierarchicalMultiPatchCMap 20307; MultiPatchCMap 142;
+      HierarchicalTPSplineSpace 48; HierarchicalMultiPatchSplineSpace 54;
+      VectorConformingHierarchicalMultiPatchSplineSpace 387;
+      VectorConformingMultiPatchSplineSpace 334; all pass.
+      Full ctest: 233/234 pass.  The 234th, "Tracing from all the
+      vertices in the macaroni", reported all 64722 assertions passed in
+      156 s of test time but was marked Timeout, its wall clock running
+      11:59 to 12:31; rerun alone it passes (125 s).
+      CONTRACT CHANGE, not mechanical: interiorTraceMeshInterfaces
+      returns more records for affected hierarchies; the interior side
+      order, formerly whatever the discovery direction gave, is now
+      specified; one existing record's sides swap.  M12 is unchanged in
+      class: each side is still named through item 16's to_space_cell,
+      by one of its leaf's darts, unspecified which.

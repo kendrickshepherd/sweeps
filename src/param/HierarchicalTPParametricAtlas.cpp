@@ -4,11 +4,69 @@
 
 using namespace param;
 
+namespace
+{
+    // The hierarchy makes elements e * r .. e * r + r - 1 of the finer level the
+    // children of element e, per direction.  They must tile e, in order.
+    void validateChildIntervals( const topology::HierarchicalTPCombinatorialMap& cmap,
+                                 const std::vector<std::shared_ptr<const TPParametricAtlas>>& levels )
+    {
+        if( levels.size() != cmap.numLevels() )
+            throw std::invalid_argument( "HierarchicalTPParametricAtlas needs one atlas per refinement level." );
+
+        for( size_t level = 0; level + 1 < levels.size(); level++ )
+        {
+            const auto coarse = tensorProductComponentAtlases( *levels.at( level ) );
+            const auto fine = tensorProductComponentAtlases( *levels.at( level + 1 ) );
+            if( coarse.size() != cmap.dim() or fine.size() != cmap.dim() )
+                throw std::invalid_argument(
+                    "HierarchicalTPParametricAtlas requires tensor products of one dimensional parametric atlases." );
+
+            for( size_t dir = 0; dir < cmap.dim(); dir++ )
+            {
+                const ParametricAtlas1d& parent = *coarse.at( dir );
+                const ParametricAtlas1d& child = *fine.at( dir );
+                const size_t ratio = cmap.refinementRatios().at( level ).at( dir );
+                const size_t n = topology::cellCount( parent.cmap(), 1 );
+                if( topology::cellCount( child.cmap(), 1 ) != n * ratio )
+                    throw std::invalid_argument( "Refinement level element counts disagree with the hierarchy." );
+
+                const auto untiled = [&]( const size_t e ) {
+                    return std::invalid_argument(
+                        "Refinement level " + std::to_string( level + 1 ) + " does not split element " +
+                        std::to_string( e ) + " of level " + std::to_string( level ) + " in direction " +
+                        std::to_string( dir ) + " into its " + std::to_string( ratio ) +
+                        " children; every coarse element must split into the same number of children." );
+                };
+
+                const double tol = 1e-10 * parent.totalLength();
+                double parent_start = 0.0;
+                double child_end = 0.0;
+                for( size_t e = 0; e < n; e++ )
+                {
+                    const double parent_end =
+                        parent_start + parent.parametricLengths( topology::Edge( topology::Dart( e ) ) )( 0 );
+                    for( size_t k = e * ratio; k < ( e + 1 ) * ratio; k++ )
+                    {
+                        const double child_start = child_end;
+                        child_end += child.parametricLengths( topology::Edge( topology::Dart( k ) ) )( 0 );
+                        if( child_start < parent_start - tol or child_end > parent_end + tol ) throw untiled( e );
+                    }
+                    if( std::abs( child_end - parent_end ) > tol ) throw untiled( e );
+                    parent_start = parent_end;
+                }
+            }
+        }
+    }
+}
+
 HierarchicalTPParametricAtlas::HierarchicalTPParametricAtlas(
     const std::shared_ptr<const topology::HierarchicalTPCombinatorialMap>& cmap,
     const std::vector<std::shared_ptr<const TPParametricAtlas>>& refinement_levels )
     : mMap( cmap ), mRefinementLevels( refinement_levels )
-{}
+{
+    validateChildIntervals( *mMap, mRefinementLevels );
+}
 
 const ParentDomain HierarchicalTPParametricAtlas::parentDomain( const topology::Cell& c ) const
 {

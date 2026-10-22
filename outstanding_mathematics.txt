@@ -2,7 +2,7 @@ Outstanding Mathematics - Claims Requiring Formal Proof
 =======================================================
 Branch: piola_dev
 Created: 2026-10-01
-Revised: 2026-10-07 (steps 8 and 9; see REVISION LOG at the end)
+Revised: 2026-10-21 (M12; see REVISION LOG at the end)
 Companion to: outstanding_issues.txt (engineering work items)
 
 PURPOSE.  outstanding_issues.txt tracks what to BUILD.  This file tracks what is
@@ -1213,6 +1213,46 @@ M11. THE REFERENCE PAPER CORROBORATES; IT DOES NOT PROVE
 
 
 -------------------------------------------------------------------------------
+M12. TRACE ALGEBRA IS INVARIANT UNDER THE LEAF-DART REPRESENTATIVE
+-------------------------------------------------------------------------------
+  CLASS     ARGUED-FROM-CODE (2026-10-20).  The 2026-10-21 review concurs;
+            a concurrence is not a measurement.
+  CLAIM     For a leaf element of a hierarchical space, traceSideData( ss,
+            element, side ) is the same whichever leaf dart names the
+            element, and so is every per-element query it calls.
+  ARGUMENT  parentBasis, connectivity, extractionOperator and the parametric
+            interval queries each begin with unrefinedAncestorDartOfCell and
+            then work on the ancestor's level cell.  The multipatch,
+            hierarchical and vector-conforming wrappers reduce the element
+            to a patch-local cell and delegate; their orientation signs are
+            per function id, not per dart.  At the tensor-product level
+            unflattenCell returns the component cells and drops the dart
+            position, so the element's identity is its element indices.
+            Trace columns come from the explicit ElementSide, never from
+            the representative dart.
+  LOAD      outstanding_issues.txt item 16 substitutes one leaf-dart
+            representative for another and relies on this claim to call the
+            substitution harmless.
+  SCOPE     In production the element reaches only traceSideData
+            (traceHasBrokenRows and traceInterfaceElement; grep, 2026-10-21).
+            A consumer that compares element darts directly is outside the
+            claim.
+  GAP       unrefinedAncestorDartOfCell can return DIFFERENT level darts of
+            one level cell for different leaf darts: the leaf dart itself
+            if it is own-level, otherwise the first unrefined ancestor it
+            meets.  The argument therefore needs every level-space query to
+            be cell-invariant, which was read, not tested.
+  ENOUGH WOULD BE  For MEASURED: on the hierarchical fixtures, for every
+            leaf, every one of its leaf darts and every side, traceSideData
+            agrees (connectivity, row indices, extraction).  For more: state
+            the cell-invariance of each level-space query and check it.
+  STATUS    2026-10-21: item 16 APPLIED.  Its 3D gate (TraceMesh_test)
+            shows that the substituted representatives produce non-empty
+            trace data in H1, H(div) and H(curl), not that it equals the
+            data of another representative.  Class unchanged.
+
+
+-------------------------------------------------------------------------------
 HOW TO USE THIS FILE
 -------------------------------------------------------------------------------
   - When closing a row in outstanding_issues.txt that depends on an item here,
@@ -1425,3 +1465,8 @@ REVISION LOG
       condition is now counted and asserted once per group.  The focused suite
       count therefore reflects coverage, not padding.  Focused suite 10947
       assertions in 11 cases, full suite 209/209.
+  2026-10-21  M12 added (item 1 step 6, outstanding_issues.txt item 16):
+    - The leaf-dart representative fix rests on M12's invariance argument,
+      recorded here as ARGUED-FROM-CODE before the fix is applied, per the
+      PROVENANCE rule.
+  2026-10-21  Item 16 applied; M12 STATUS added, class unchanged.

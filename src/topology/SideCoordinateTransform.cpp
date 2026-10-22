@@ -67,6 +67,8 @@ namespace topology
         }
     }
 
+    void validateSideCoordinateTransform( const SideCoordinateTransform& transform ) { validateTransform( transform ); }
+
     SideCoordinateTransform sideCoordinateTransform( const size_t dim,
                                                     const size_t source_side_id,
                                                     const size_t destination_side_id,
