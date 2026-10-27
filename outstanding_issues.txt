@@ -995,9 +995,9 @@ MEDIUM PRIORITY — Architectural / Correctness
      5. The 3-level support-containment experiment; settle grading as a
         separate policy.  [DONE with the fix, STEP 5 FIX: c8a5cad]
      6. Interface fragments and side embeddings; repair one-to-many
-        enumeration.  [FIRST HALF: E3 measured, proposal.  SECOND HALF:
-        items 1-6 done, items 16-18 applied; STEP 6 below]
+        enumeration.  [DONE with items 16-18: 2c98828; STEP 6 below]
      7. Off-node physical H1, H(div) and H(curl) trace tests.
+        [DONE: STEP 7 below; uncommitted]
      8. 2D/3D orientation, refinement-direction, junction and cycle matrix.
      9. A separate discrete-complex gate: composition to zero, plus
         rank/nullity exactness on a contractible fixture.
@@ -1565,8 +1565,8 @@ MEDIUM PRIORITY — Architectural / Correctness
        validator hole.  Recorded as items 16 (defect and fix) and 17
        (validator) and as outstanding_mathematics.txt M12 (invariance),
        so each can be processed on its own.  Order item 6 follows 16-17.
-     LEAF-DART FIX APPLIED (2026-10-21, uncommitted).  Items 16 and 17
-       are applied as approved; measurements are recorded there.  Order
+     LEAF-DART FIX APPLIED (2026-10-21; committed in 2c98828).  Items 16
+       and 17 are applied as approved; measurements are recorded there.  Order
        item 6 is done: the aggregate SIR [known-defect][!shouldfail] tag
        is removed, SIR passes (10249 assertions in 7 cases), and the
        focused suites and the full ctest pass (item 16, APPLIED).
@@ -1580,7 +1580,7 @@ MEDIUM PRIORITY — Architectural / Correctness
        uncommitted step-6 work are wrapped (TraceMesh.cpp 7, TraceMesh
        _test.cpp 2, SIR 1).  TraceMesh.cpp's one 125-column line, a
        throw in levelTraceMeshes, predates step 6 and is left as it is.
-     ITEM 18 APPLIED (2026-10-22, uncommitted).  The user approved fix
+     ITEM 18 APPLIED (2026-10-22; committed in 2c98828).  The user approved fix
        (i) with four refinements and ruled that step 6 is not ready to
        commit until it lands.  It has landed (item 18, APPLIED): same-
        level interior records are complete, their side order is
@@ -1589,6 +1589,100 @@ MEDIUM PRIORITY — Architectural / Correctness
        Step 6 is ready to commit, after the separate step-5 ledger
        follow-up.  Coarse-fine interior fragments within a patch remain
        item 7.
+     COMMITTED 2026-10-22 by the user as 2c98828 "Support asymmetric
+       multipatch trace refinement", with the step-5 ledger follow-up
+       folded in (all 18 of its added lines are in 2c98828).
+     STEP 7 (2026-10-23; uncommitted).  Off-node physical traces on the
+       step-6 fragments (test/SharedInterfaceRefinement_test.cpp, two
+       cases).  Done in two halves.  The 2D half stopped for vetting; the
+       user's review the same day accepted its gate, asked for the
+       corrections below, and chose option A for 3D: one asymmetric 3D
+       fixture with frame-free traces, H(div) v.n (a scalar) and H(curl)
+       n x v (a physical tangential vector), so no pair of face tangents
+       has to be chosen (item 9).  Broader 3D coverage is step 8.
+     Test.  For each patch-interface record and fragment point, each side
+       maps the point through its TraceSideEmbedding into its leaf
+       element and evaluates the spatial basis there (H1 values, and
+       eval::evaluateSpatialHDivBasisValues / ...HCurlBasisValues).  The
+       geometry is evaluated at the same parametric point on a separate
+       level-0 space.  Checked: one physical point (1e-11); opposite
+       outward normals from J^-T (1e-9); H1 values equal, H(div) v.n and
+       H(curl) n x v opposite (relative 1e-9); a function on one side
+       only has a zero trace; every point has a shared trace above 1e-3;
+       for vectors, some full-vector-jump observation exists, so full
+       vector continuity is not imposed; det J > 0 at every point.
+     Geometry.  A curved control net: Greville points of each level-0
+       patch, placed globally and perturbed quadratically.  The test
+       measures physical-point agreement, not the geometry's regularity
+       across the interface.  splineGeometry throws if two patches give a
+       shared function different control points.  No production trace
+       helper derives an expectation.
+     Fixtures.  2D: the 11 step-6 layouts, fragment points 0.17, 0.42,
+       0.83.  3D: two 2x2x2 unit cubes, patch 0's s-max side glued to
+       patch 1's s-min side, aligned (ZeroToZero) or a quarter turn
+       (ZeroToOne).  Patch 0 refines every element but (1,0,0); patch 1
+       refines only the element facing it, so each side is finer on some
+       fragment: 4 interface cells, 16 fragments.  Points (0.17, 0.62),
+       (0.71, 0.29), (0.38, 0.88).
+     MEASURED counts (P0 instrumentation).  2D: 1-4 records per layout,
+       all comparisons pass.  3D, identical for both fixtures.  The last
+       two columns count observations per (record, point, shared
+       function), not unique shared functions: "nonzero" is nonzero
+       shared-trace observations, "jumps" full-vector-jump observations.
+                  records  comparisons  nonzero  jumps
+         H1          16        2301         403      0
+         H(div)      16        3387         192    192
+         H(curl)     16        4866         568    576
+     Bypass probes, MEASURED (each edits the working file, reruns, then
+       restores it byte-identical by cmp and rebuilds green):
+       P1 ignore the embedding (y = xi): every layout fails except the two
+          "normal" ones, whose fragments are whole sides (identity
+          embeddings); non-dyadic, reversed and both 3D fixtures fail in
+          all three spaces (points, normals, traces).
+       P2 sign +1 for the vector traces: every layout fails in H(div) and
+          H(curl), 2D and 3D.
+       P3 (2D half only) drop one nonzero shared function from the second
+          side: every 2D layout fails in all three spaces.
+       P4 reference values and reference normal (both the basis
+          transformation and the trace operator replaced): the trace
+          comparisons pass everywhere except 3D quarter-turn H(curl) (576
+          of 576 fail).  The full-vector-jump guards fail on 21 instances:
+          9 non-reversed 2D layouts x 2 spaces, 3D aligned x 2, and 3D
+          quarter-turn H(div).  So the review's third probe ("the curved-
+          geometry gate must fail") fails on trace agreement only for 3D
+          quarter-turn H(curl): a consistently parametric comparison can
+          bypass the Piola map (outstanding_mathematics.txt M13, ARGUED-
+          FROM-CODE).  P4 does not show that deleting the Piola map while
+          keeping physical normals would go undetected; that was not
+          probed.
+       P5 partial Piola (H(div) without 1/det J; H(curl) through the
+          contravariant map): every layout fails in both spaces, 2D and
+          3D; H(curl) also shows nonzero one-sided traces.  So these
+          curved fixtures detect the two partial-Piola errors tested.
+     Correction to the halfway report: its remedy for P4, a patch-1 knot
+       scaling along the glued side, is outside the contract.
+       validateStrongInterfaceCompatibility throws for scaled interfaces.
+       Read from code: Phase0 B3/B6 pin only the mirrored-knot rejection,
+       so the scaling rejection is ARGUED-FROM-CODE.
+     Review corrections applied.  curvedMap's comment claimed a
+       determinant property it did not justify; it now reads "A curved
+       control net; positive orientation is checked at every evaluated
+       point."  multipatch_development_workflow.txt: Phase 4's "Not yet
+       verified" list, the Phase 5A heading, Capabilities, Limitations
+       (coverage, and the M13 limitation) and the current position.
+     Runs.  SIR 10368 assertions in 10 cases; full ctest 236/236.  No
+       added SIR line exceeds 120 columns.
+     Helpers not merged (user, 2026-10-26).  The shared numerical
+       comparison is already factored into fragmentTraceConformity; the
+       remaining 2D and 3D setup is dimension-specific and easier to
+       audit in its explicit form.  Refactoring validated tests would add
+       risk without reducing a real maintenance burden.
+     REVIEW CORRECTIONS (2026-10-26).  The counters are renamed
+       nonzero_shared_trace_observations and full_vector_jump_observations
+       (they count observations, not unique functions); M13 and the
+       workflow limitation are narrowed to what P4 and P5 show; "C0 but
+       not C1" is removed from the test comment and the Geometry
+       paragraph, since the test does not measure geometric regularity.
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces
@@ -1762,6 +1856,10 @@ DEFERRED — Phase 5B and Beyond
    convention (ordering and normalization of the two tangent vectors, consistency
    with TPPermutation across interfaces) must be documented before implementing
    3D H(curl) physical trace tests.
+   STEP 7 NOTE (2026-10-23).  Item 1 step 7 compares the frame-free 3D
+   H(curl) trace n x v, a physical vector, so it did not need this
+   convention.  The item stays open for any API that exposes the two
+   tangential components separately.
 
 
 10. Nonmatching Interface / Mortar Framework (Long Term)
@@ -1973,7 +2071,7 @@ BLOCKING ITEM 1 STEP 6 — Found 2026-10-20, reviewed 2026-10-21
              unrefinedAncestorDartOfCell()
 
     Status: MEASURED 2026-10-20, pre-existing.  Fix reviewed and APPROVED
-    2026-10-21 with additions b-d below; APPLIED the same day (uncommitted,
+    2026-10-21 with additions b-d below; APPLIED the same day (2c98828,
     see APPLIED at the end of this item).  Item 1 step 6's last
     [known-defect] tag is removed.
 
@@ -2052,7 +2150,7 @@ BLOCKING ITEM 1 STEP 6 — Found 2026-10-20, reviewed 2026-10-21
     DOWNSTREAM INVARIANCE: outstanding_mathematics.txt M12, ARGUED-FROM-CODE.
     The review concurs; a concurrence is not a measurement.
 
-    APPLIED 2026-10-21, uncommitted, as a-e above.
+    APPLIED 2026-10-21 as a-e above; committed in 2c98828.
       a, b. TraceMesh.cpp levelTraceMeshes: the leaf-dart lookup, and the
          duplicate-key runtime_error "Two leaf cells name the same trace
          mesh element." (DEFENSIVE).
@@ -2095,7 +2193,7 @@ BLOCKING ITEM 1 STEP 6 — Found 2026-10-20, reviewed 2026-10-21
     File(s): src/basis/TraceMesh.cpp  validateTraceMeshInterface()
 
     Status: ARGUED-FROM-CODE 2026-10-21, found in review; independent of 16.
-    Fix APPROVED and APPLIED the same day (uncommitted, see APPLIED below).
+    Fix APPROVED and APPLIED the same day (2c98828, see APPLIED below).
 
     For Boundary and Interior records the validator checks only that each
     side present embeds its whole side by the identity.  It never checks
@@ -2116,7 +2214,7 @@ BLOCKING ITEM 1 STEP 6 — Found 2026-10-20, reviewed 2026-10-21
     accepts fewer records.  Through enumeration the new throws are
     DEFENSIVE.
 
-    APPLIED 2026-10-21, uncommitted.  MEASURED before the change: all four
+    APPLIED 2026-10-21 (2c98828).  MEASURED before the change: all four
     new cases in TraceMesh_test "Malformed..." were accepted (a Boundary
     record with a second side, a Boundary record with Flip1d, an Interior
     record without a second side, an Interior record with Flip1d).  With
@@ -2134,7 +2232,7 @@ BLOCKING ITEM 1 STEP 6 — Found 2026-10-20, reviewed 2026-10-21
     ARGUED-FROM-CODE, with one prediction checked.  Pre-existing: the same
     two records are missing on the code before item 16's fix.  Fix (i)
     APPROVED 2026-10-22 with four refinements and APPLIED the same day,
-    uncommitted (REVIEW and APPLIED below).  The [known-defect]
+    committed in 2c98828 (REVIEW and APPLIED below).  The [known-defect]
     [!shouldfail] case that pinned it is merged into item 16's 3D gate.
 
     MEASURED (H1, H(div) and H(curl) alike).  In item 16's 3D fixture the
@@ -2206,7 +2304,7 @@ BLOCKING ITEM 1 STEP 6 — Found 2026-10-20, reviewed 2026-10-21
     that remains the interior-refinement work (item 7).  Step 6 is not
     ready to commit until this lands.
 
-    APPLIED 2026-10-22, uncommitted.
+    APPLIED 2026-10-22; committed in 2c98828.
       1. TraceMesh.cpp: LevelElementKey names what levelElementKey
          returns, and item 16's leaf_dart_of uses it.  levelLeafKeys
          replaces patchLeafSet.  interiorTraceMeshInterfaces keys leaf

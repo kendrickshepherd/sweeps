@@ -1252,6 +1252,72 @@ M12. TRACE ALGEBRA IS INVARIANT UNDER THE LEAF-DART REPRESENTATIVE
             data of another representative.  Class unchanged.
 
 
+M13. A CONSISTENTLY PARAMETRIC TRACE COMPARISON CAN BYPASS THE PIOLA MAP
+-------------------------------------------------------------------------------
+  CLASS     ARGUED-FROM-CODE (2026-10-23; narrowed 2026-10-26).  Its
+            consequences are MEASURED on the item 1 step 7 fixtures (probes
+            P4, P5); fixtures refute, they do not prove.
+  CLAIM     On a strongly coupled interface, a consistently parametric
+            comparison of H(div) v.n and 2D H(curl) n x u, with reference
+            basis values AND the reference normal (both the basis
+            transformation and the trace operator replaced, as in P4),
+            agrees across the interface exactly when the physical
+            comparison does.  So such a comparison can bypass the Piola
+            map.  In 3D H(curl) the parametric n_hat x u_hat agrees in
+            general only when the two sides' tangent frames coincide.
+  ARGUMENT  validateStrongInterfaceCompatibility (MultiPatchSplineSpace.cpp)
+            admits tangential knot vectors that match up to translation,
+            permutation and reversal, and throws for scaled ones.  With
+            shared control points, F_a = F_b o phi on the interface, phi an
+            affine signed permutation, so the tangential Jacobian columns
+            satisfy J_a t_k = +-J_b t_pi(k).
+            H(div): v = J v_hat / det J and n = J^-T e_a / |J^-T e_a| give
+            v.n = +-v_hat_a / A, with A = |J^-T e_a| det J the length or
+            area element of the side.  A depends on the tangential columns
+            only, so both sides share it and v.n agrees iff v_hat_a does.
+            H(curl): u = J^-T u_hat gives u.(J t_k) = u_hat_k.  In 2D,
+            n x u = +-u_hat_t / |J t|, again a shared factor.  In 3D, n x u
+            is the tangent-plane vector with components u_hat_k against the
+            dual of (J t_1, J t_2), shared up to pi.  The raw parametric
+            n_hat x u_hat is written in each side's own parametric axes, so
+            the two agree in general only when pi is the identity with no
+            reversal.
+            The two partial-Piola errors probed in P5 do not reduce to the
+            tangential columns.  Without 1/det J, (J v_hat).n = +-v_hat_a
+            det J / A, and det J depends on J e_a; the contravariant map
+            J u_hat / det J uses J e_a too.  Strong coupling does not match
+            J e_a across the interface, so these need not agree; P5
+            measured that they do not on the curved step 7 fixtures.
+  LOAD      Item 1 step 7 (outstanding_issues.txt) and the workflow
+            limitation on cross-interface trace agreement.  The Piola gate
+            (volume spatial evaluation) carries the Piola maps instead.
+  SCOPE     Strongly coupled interfaces, and comparisons parametric in
+            BOTH the basis transformation and the trace operator.  NOT
+            claimed: that deleting the Piola map while keeping physical
+            normals would go undetected (not probed), or that every wrong
+            non-tangential Jacobian factor is detected.  The curved step 7
+            fixtures detect the two partial-Piola errors tested (P5).  A
+            weighted coupling or a mortar interface (item 10) would give
+            the sides different A.
+  GAP       The tangential-column identity uses a geometry built in the
+            shared space, as the step 7 fixtures do; per-patch geometries
+            that match only pointwise were not considered.  The 3D
+            frame-change condition was measured on one quarter turn only.
+            The mixed variant (reference values, physical normal) was not
+            probed.
+  ENOUGH WOULD BE  For MEASURED: P4 over step 8's 3D orientation classes,
+            with H(curl) failing on exactly the classes whose pi is not the
+            identity; and a mixed probe to settle the case left open above.
+  STATUS    2026-10-23, item 1 step 7.  P4 (reference values, reference
+            normal): trace comparisons pass on all 11 2D layouts, 3D
+            aligned and 3D quarter-turn H(div); 3D quarter-turn H(curl)
+            fails all 576 comparisons.  P5 (H(div) without 1/det J; H(curl)
+            through the contravariant map): every layout fails in both
+            spaces, 2D and 3D.
+            2026-10-26: narrowed in review (title, CLAIM, ARGUMENT's last
+            paragraph, SCOPE, GAP).  Class unchanged.
+
+
 -------------------------------------------------------------------------------
 HOW TO USE THIS FILE
 -------------------------------------------------------------------------------
@@ -1470,3 +1536,13 @@ REVISION LOG
       recorded here as ARGUED-FROM-CODE before the fix is applied, per the
       PROVENANCE rule.
   2026-10-21  Item 16 applied; M12 STATUS added, class unchanged.
+  2026-10-23  M13 added (item 1 step 7): why cross-interface trace agreement
+    cannot detect a missing Piola map, with the P4/P5 probe measurements.
+  2026-10-26  M13 narrowed in review.  P4 replaced both the basis
+    transformation and the trace operator with reference-coordinate
+    versions, so it shows only that a consistently parametric comparison
+    can bypass the Piola map, not that deleting the map while keeping
+    physical normals goes undetected.  P5 shows that these curved fixtures
+    detect the two partial-Piola errors tested, not that every wrong
+    non-tangential factor is detected.  Retitled from "CROSS-INTERFACE
+    TRACE AGREEMENT CANNOT DETECT A MISSING PIOLA MAP".

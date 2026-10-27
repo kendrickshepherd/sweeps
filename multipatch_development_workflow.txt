@@ -196,13 +196,16 @@ partition of unity and one trace per function across faces inside a patch.
 One shared internal helper computes the active functions of the single-patch,
 multipatch and vector hierarchical spaces (item 1, STEP 5 FIX).
 
+Cross-patch coarse-fine interface fragments with affine side embeddings
+(item 1 step 6) and off-node physical trace agreement on them (step 7: H1
+values, H(div) normal and H(curl) tangential traces) are verified on 11 2D
+two-patch layouts and two 3D split-face fixtures.
+
 Not yet verified (outstanding_issues.txt item 1):
 
-  - coarse-fine trace enumeration: patchTraceMeshInterfaces pairs a leaf with
-    a non-leaf cell; it needs interface fragments with side embeddings,
-  - physical H(div) normal and H(curl) tangential conformity off nodes,
   - leaf-level jumps above two, or in 3D,
-  - 3D, junctions, cycles, and discrete-complex exactness.
+  - other 3D orientation classes, junctions and cycles (step 8), and
+    discrete-complex exactness (step 9).
 
 Truly nonmatching patch meshes remain a future mortar or weak-coupling problem.
 
@@ -217,7 +220,7 @@ does not prescribe a Stokes, Navier-Stokes, Maxwell, DG, or Nitsche formulation.
 
 
 PHASE 5A: MESH-LEVEL ALGEBRAIC TRACE ENUMERATION
-Status: COMPLETE FOR SAME-LEVEL INTERFACES; COARSE-FINE EXTENSION OPEN
+Status: COMPLETE EXCEPT SAME-PATCH COARSE-FINE SUBDIVISION
 -------------------------------------------------------------------------------
 
 Goals:
@@ -234,7 +237,12 @@ Capabilities:
   - Cross-patch interface pairing.
   - Same-patch, same-level interior-face enumeration.
   - Broken-only interior filtering.
-  - Hierarchical patch-interface enumeration where both sides' leaves match.
+  - Hierarchical patch-interface enumeration with asymmetric leaves: one
+    record per common fragment, each side with an affine TraceSideEmbedding
+    from parametric intervals (item 1 step 6).
+  - Fragment embeddings that place both sides' evaluations at one physical
+    point, where H1 values, H(div) v.n and H(curl) n x v agree off nodes
+    with opposite outward normals (item 1 step 7).
   - 2D and 3D side-index permutations.
   - Continuous side-point permutations.
   - Conversion from a mesh-level trace interface to Phase 2 trace data.
@@ -244,12 +252,20 @@ Current limitations:
   - Same-patch hierarchical coarse-fine interior interfaces are not subdivided.
     Physical weak integration across such interfaces will require fine-side
     subdivision and mapping into the neighboring coarse side.
-  - Cross-patch hierarchical coarse-fine interfaces are enumerated
-    incorrectly (MEASURED, outstanding_issues.txt item 1, E3):
-    patchTraceMeshInterfaces pairs a leaf with a non-leaf partner and omits
-    the coarse leaf's real coarse-fine pairing, and traceInterfaceElement
-    throws on that record. Repair is item 1 step 6: interface fragments with
-    affine side embeddings.
+  - Cross-patch hierarchical coarse-fine coverage (outstanding_issues.txt
+    item 1 steps 6 and 7) is 11 2D two-patch layouts (normal, tangential,
+    non-dyadic, three-level, crossed, reversed; either patch refined) and
+    two 3D split-face fixtures (aligned and quarter-turn faces, each side
+    finer on some fragment). Other 3D orientation classes, junctions and
+    cycles are item 1 step 8.
+  - A consistently parametric trace comparison (reference basis values and
+    the reference normal) can bypass the Piola map in H(div) and 2D
+    H(curl): strong coupling matches the interface parametrizations, so
+    both sides share the tangential factors (outstanding_mathematics.txt
+    M13). Deleting the Piola map while keeping physical normals was not
+    tested. The curved fixtures detect the two partial-Piola errors tested
+    and, in 3D H(curl), the parametric comparison under a frame change.
+    The Piola gate (volume spatial evaluation) carries the Piola maps.
   - Trace column ordering across flipped interfaces is not yet explicit:
     TraceSideData has no ordering field (item 2, action e). Per-element
     pairing on flipped, multi-element interfaces is verified (STAGE 2 in
@@ -445,8 +461,11 @@ CURRENT POSITION AND NEXT ACTION
 Current position:
 
   - Phases 0 through 4 are complete.
-  - Phase 5A is complete for same-level interfaces; cross-patch coarse-fine
-    enumeration is open (item 1, step 6).
+  - Phase 5A is complete except same-patch coarse-fine subdivision.
+    Cross-patch coarse-fine fragments are enumerated (item 1, step 6) and
+    their off-node physical traces agree (step 7: 11 2D layouts, two 3D
+    fixtures). Item 1 continues with step 8, the 2D/3D orientation,
+    refinement-direction, junction and cycle matrix.
   - The volume Piola gate is complete.
   - Phase 5B is the next implementation task.
 

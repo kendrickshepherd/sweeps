@@ -8,6 +8,11 @@
 #include <TraceExtraction.hpp>
 #include <TraceMesh.hpp>
 #include <VectorConformingHierarchicalMultiPatchSplineSpace.hpp>
+#include <MultiPatchSplineSpace.hpp>
+#include <ParentPoint.hpp>
+#include <SideCoordinateTransform.hpp>
+#include <SplineSpaceEvaluator.hpp>
+#include <TPSplineSpace.hpp>
 #include <CombinatorialMapMethods.hpp>
 #include <Eigen/Dense>
 #include <algorithm>
@@ -20,6 +25,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 using namespace basis;
@@ -1408,6 +1414,458 @@ TEST_CASE( "Uneven child counts are rejected when a hierarchy is built", "[share
              [&] { return builtSpace( buildHierarchicalSplineSpace( mp_levels, mp_mixed ) ); } );
     attempt( "two patches H(div), mixed leaves",
              [&] { return builtSpace( buildHierarchicalSplineSpace( hdiv_levels, mp_mixed ) ); } );
+    INFO( joined( problems ) );
+    CHECK( problems.empty() );
+}
+
+// Item 1 step 7: physical trace conformity on the step-6 fragments.  The
+// geometry is a level-0 spline whose control points map each patch's
+// Greville points smoothly.  Both sides must reach one physical point, and
+// full-vector-jump observations show that full vector continuity is not imposed.
+namespace
+{
+    enum class TraceKind
+    {
+        H1,
+        HDiv,
+        HCurl
+    };
+
+    struct LayoutHierarchy
+    {
+        std::vector<std::shared_ptr<const TPSplineSpace>> level_zero_patches;
+        std::vector<std::shared_ptr<const MultiPatchSplineSpace>> levels;
+        std::vector<std::vector<Cell>> leaves;
+    };
+
+    // The hierarchy patchInterfaceEnumeration builds.
+    LayoutHierarchy layoutHierarchy( const TwoPatchLayout& layout )
+    {
+        const double ptol = 1e-10;
+        LayoutHierarchy out;
+        out.leaves.resize( layout.breakpoints.size() );
+        for( size_t level = 0; level < layout.breakpoints.size(); level++ )
+        {
+            std::vector<std::shared_ptr<const TPSplineSpace>> patches;
+            for( size_t patch = 0; patch < 2; patch++ )
+            {
+                SmallVector<KnotVector, 3> kvs;
+                for( const std::vector<double>& dir : patchBreakpoints( layout, level, patch ) )
+                {
+                    std::vector<double> knots{ dir.front(), dir.front() };
+                    knots.insert( knots.end(), dir.begin(), dir.end() );
+                    knots.insert( knots.end(), { dir.back(), dir.back() } );
+                    kvs.push_back( KnotVector( knots, ptol ) );
+                }
+                patches.push_back( makePatch( kvs, { 2, 2 } ) );
+            }
+            if( level == 0 ) out.level_zero_patches = patches;
+            out.levels.push_back( std::make_shared<const MultiPatchSplineSpace>(
+                buildH1MultiPatchSplineSpace( patches, layout.reversed ? sMaxToSMax() : sMaxToSMin() ) ) );
+        }
+        for( const auto& [level, patch, s, t] : layout.leaves )
+            out.leaves.at( level ).push_back( patchTopCellAt( levelCMap( *out.levels.at( level ) ), patch, { s, t } ) );
+        return out;
+    }
+
+    // Patch 1 placed so that its glued side meets patch 0's s-max side.
+    Eigen::VectorXd layoutGlobalPoint( const TwoPatchLayout& layout, const size_t patch, const Eigen::VectorXd& p )
+    {
+        if( patch == 0 ) return p;
+        const std::vector<double>& s = layout.breakpoints.front()[0];
+        Eigen::VectorXd out = p;
+        out( 0 ) = layout.reversed ? 2.0 * s.back() - p( 0 ) : s.back() + p( 0 ) - s.front();
+        out( 1 ) = patchZeroT( layout, patch, p( 1 ) );
+        return out;
+    }
+
+    // A curved control net; positive orientation is checked at every evaluated point.
+    Eigen::VectorXd curvedMap( const Eigen::VectorXd& p )
+    {
+        Eigen::VectorXd out = p;
+        out( 0 ) += 0.2 * p( 1 ) * p( 1 );
+        out( 1 ) += 0.1 * p( 0 ) * p( 0 );
+        if( p.size() == 3 )
+        {
+            out( 0 ) += 0.1 * p( 2 ) * p( 2 );
+            out( 2 ) += 0.15 * p( 0 ) * p( 1 );
+        }
+        return out;
+    }
+
+    struct SplineGeometry
+    {
+        std::shared_ptr<const MultiPatchSplineSpace> ss;
+        Eigen::MatrixXd cpts; // coordinate by function
+    };
+
+    // Throws unless the patches give each shared function one control point.
+    SplineGeometry splineGeometry( const std::shared_ptr<const MultiPatchSplineSpace>& ss,
+                                   const std::vector<std::shared_ptr<const TPSplineSpace>>& patches,
+                                   const std::function<Eigen::VectorXd( size_t, const Eigen::VectorXd& )>& to_global )
+    {
+        std::vector<Eigen::MatrixXd> patch_cpts;
+        for( size_t patch = 0; patch < patches.size(); patch++ )
+        {
+            const Eigen::MatrixXd greville = grevillePoints( *patches.at( patch ) );
+            Eigen::MatrixXd cpts( greville.rows(), greville.cols() );
+            for( Eigen::Index i = 0; i < greville.rows(); i++ )
+                cpts.row( i ) = curvedMap( to_global( patch, greville.row( i ).transpose() ) ).transpose();
+            patch_cpts.push_back( cpts );
+        }
+        const Eigen::MatrixXd cpts = multiPatchCoefficients( *ss, patch_cpts );
+        const std::vector<Eigen::MatrixXd> split = splitMultiPatchCoefficients( *ss, cpts );
+        for( size_t patch = 0; patch < patches.size(); patch++ )
+            if( ( split.at( patch ) - patch_cpts.at( patch ) ).cwiseAbs().maxCoeff() > geom_tol )
+                throw std::runtime_error( "patch control points disagree on a shared function" );
+        return { ss, cpts.transpose() };
+    }
+
+    // The level-0 element of a patch containing a patch-parametric point, and
+    // the point's parent coordinates there; empty unless exactly one.
+    std::optional<std::pair<Cell, Eigen::VectorXd>>
+        levelZeroLocation( const MultiPatchSplineSpace& ss, const size_t patch, const Eigen::VectorXd& point )
+    {
+        const auto& atlas = ss.basisComplex().parametricAtlas();
+        const Eigen::Index dim = point.size();
+        std::optional<std::pair<Cell, Eigen::VectorXd>> out;
+        for( const Cell& c : topCellsForPatch( levelCMap( ss ), patch ) )
+        {
+            const Eigen::VectorXd xi = ( point - atlas.parametricStarts( c ).head( dim ) )
+                                           .cwiseQuotient( atlas.parametricLengths( c ).head( dim ) );
+            if( ( xi.array() < -geom_tol ).any() or ( xi.array() > 1.0 + geom_tol ).any() ) continue;
+            if( out.has_value() ) return std::nullopt;
+            out.emplace( c, xi );
+        }
+        return out;
+    }
+
+    // The evaluator reads no zero flags.
+    param::ParentPoint cubePoint( const Eigen::VectorXd& xi )
+    {
+        return param::ParentPoint(
+            param::cubeDomain( xi.size() ), Vector3dMax( xi ), param::BaryCoordIsZeroVec( 2 * xi.size(), false ) );
+    }
+
+    // n x v, a scalar in 2D.
+    Eigen::VectorXd crossWithNormal( const Eigen::VectorXd& n, const Eigen::VectorXd& v )
+    {
+        if( n.size() == 2 ) return Eigen::VectorXd::Constant( 1, n( 0 ) * v( 1 ) - n( 1 ) * v( 0 ) );
+        return Eigen::Vector3d( n ).cross( Eigen::Vector3d( v ) );
+    }
+
+    struct SideTrace
+    {
+        Eigen::VectorXd x;
+        Eigen::VectorXd normal; // outward unit normal
+        std::map<FunctionId, Eigen::VectorXd> trace;
+        std::map<FunctionId, Eigen::VectorXd> spatial;
+    };
+
+    // Evaluates at fragment point xi, placed on the side's leaf by its embedding.
+    SideTrace sideTrace( const SplineSpace& ss,
+                         const TraceKind kind,
+                         const TraceMeshSide& side,
+                         const Eigen::VectorXd& xi,
+                         const SplineGeometry& geom )
+    {
+        const size_t dim = ss.basisComplex().parametricAtlas().cmap().dim();
+        const Eigen::VectorXd y = embedTraceFragmentPoint( side.embedding, xi );
+        const std::vector<size_t> axes = tangentialAxes( dim, side.side.sideId() );
+        Eigen::VectorXd leaf_xi( dim );
+        leaf_xi( side.side.axis ) = side.side.lower ? 0.0 : 1.0;
+        for( size_t k = 0; k < axes.size(); k++ ) leaf_xi( axes.at( k ) ) = y( k );
+
+        eval::SplineSpaceEvaluator evals( ss, 0 );
+        evals.localizeElement( side.element );
+        evals.localizeParentPoint( cubePoint( leaf_xi ) );
+        const auto located = levelZeroLocation( *geom.ss, side.patch_id, evals.evaluateParametricPoint() );
+        if( not located.has_value() ) throw std::runtime_error( "the point is not in exactly one level-0 element" );
+        eval::SplineSpaceEvaluator geom_evals( *geom.ss, 1 );
+        geom_evals.localizeElement( located->first );
+        geom_evals.localizeParentPoint( cubePoint( located->second ) );
+
+        SideTrace out;
+        out.x = geom_evals.evaluateManifold( geom.cpts );
+        const Eigen::MatrixXd jacobian = geom_evals.evaluateParametricToSpatialJacobian( geom.cpts );
+        if( jacobian.determinant() <= 0.0 ) throw std::runtime_error( "the geometry is inverted" );
+        out.normal = jacobian.inverse().transpose().col( side.side.axis ) * ( side.side.lower ? -1.0 : 1.0 );
+        out.normal.normalize();
+        const Eigen::MatrixXd values =
+            kind == TraceKind::H1     ? evals.evaluateBasisValuesAtParentPoint()
+            : kind == TraceKind::HDiv ? eval::evaluateSpatialHDivBasisValues( evals, geom_evals, geom.cpts )
+                                      : eval::evaluateSpatialHCurlBasisValues( evals, geom_evals, geom.cpts );
+        const std::vector<FunctionId> conn = ss.connectivity( side.element );
+        for( size_t i = 0; i < conn.size(); i++ )
+        {
+            const Eigen::VectorXd v = values.row( i ).transpose();
+            out.spatial[conn.at( i )] = v;
+            out.trace[conn.at( i )] = kind == TraceKind::H1     ? v
+                                      : kind == TraceKind::HDiv ? Eigen::VectorXd::Constant( 1, v.dot( out.normal ) )
+                                                                : crossWithNormal( out.normal, v );
+        }
+        return out;
+    }
+
+    bool traceClose( const Eigen::VectorXd& a, const Eigen::VectorXd& b )
+    {
+        return ( a - b ).norm() <= 1e-9 * std::max( { 1.0, a.norm(), b.norm() } );
+    }
+
+    std::string sideText( const TraceMeshSide& side )
+    {
+        return "p" + std::to_string( side.patch_id ) + " L" + std::to_string( side.level ) + " side " +
+               std::to_string( side.side.sideId() );
+    }
+
+    struct ConformityOutcome
+    {
+        std::vector<std::string> problems;
+        size_t records = 0;
+        size_t comparisons = 0; // functions compared at a point
+        // Observations are per (record, point, shared function), not unique functions.
+        size_t nonzero_shared_trace_observations = 0; // trace above 1e-3
+        size_t full_vector_jump_observations = 0;     // spatial value jumps
+    };
+
+    // H1 values agree.  With each side's outward normal, the H(div) normal
+    // traces and the H(curl) n x u are opposite.  A function on one side only
+    // has a zero trace.
+    ConformityOutcome fragmentTraceConformity( const std::string& prefix,
+                                               const SplineSpace& ss,
+                                               const TraceKind kind,
+                                               const SplineGeometry& geom,
+                                               const std::vector<Eigen::VectorXd>& points )
+    {
+        ConformityOutcome out;
+        const double sign = kind == TraceKind::H1 ? 1.0 : -1.0;
+        for( const TraceMeshInterface& iface : patchTraceMeshInterfaces( ss ) )
+        {
+            if( not iface.second.has_value() )
+            {
+                out.problems.push_back( prefix + "a patch interface record has one side" );
+                continue;
+            }
+            out.records++;
+            for( const Eigen::VectorXd& xi : points )
+            {
+                std::ostringstream where;
+                where << prefix << sideText( iface.first ) << " / " << sideText( *iface.second ) << " at "
+                      << xi.transpose() << ": ";
+                SideTrace a;
+                SideTrace b;
+                try
+                {
+                    a = sideTrace( ss, kind, iface.first, xi, geom );
+                    b = sideTrace( ss, kind, *iface.second, xi, geom );
+                }
+                catch( const std::exception& e )
+                {
+                    out.problems.push_back( where.str() + e.what() );
+                    continue;
+                }
+                if( ( a.x - b.x ).norm() > 1e-11 )
+                {
+                    std::ostringstream text;
+                    text << where.str() << "physical points " << a.x.transpose() << " and " << b.x.transpose();
+                    out.problems.push_back( text.str() );
+                }
+                if( ( a.normal + b.normal ).norm() > 1e-9 )
+                    out.problems.push_back( where.str() + "outward normals are not opposite" );
+                std::set<FunctionId> fids;
+                for( const SideTrace* t : { &a, &b } )
+                    for( const auto& [f, v] : t->trace ) fids.insert( f );
+                bool nonzero = false;
+                for( const FunctionId& f : fids )
+                {
+                    const bool in_a = a.trace.contains( f );
+                    const bool in_b = b.trace.contains( f );
+                    const Eigen::VectorXd zero = Eigen::VectorXd::Zero( ( in_a ? a : b ).trace.at( f ).size() );
+                    const Eigen::VectorXd ta = in_a ? a.trace.at( f ) : zero;
+                    const Eigen::VectorXd tb = sign * ( in_b ? b.trace.at( f ) : zero );
+                    out.comparisons++;
+                    if( not traceClose( ta, tb ) )
+                    {
+                        std::ostringstream text;
+                        text << where.str() << "function " << f << " has traces " << ta.transpose() << " and "
+                             << tb.transpose() << ( in_a and in_b ? "" : in_a ? " (first only)" : " (second only)" );
+                        out.problems.push_back( text.str() );
+                    }
+                    if( not in_a or not in_b ) continue;
+                    if( ta.norm() > 1e-3 )
+                    {
+                        out.nonzero_shared_trace_observations++;
+                        nonzero = true;
+                    }
+                    if( kind != TraceKind::H1 and ( a.spatial.at( f ) - b.spatial.at( f ) ).norm() > 1e-6 )
+                        out.full_vector_jump_observations++;
+                }
+                if( not nonzero ) out.problems.push_back( where.str() + "no shared function has a nonzero trace" );
+            }
+        }
+        return out;
+    }
+
+    std::vector<std::pair<std::string, ConformityOutcome>> layoutTraceConformity( const TwoPatchLayout& layout )
+    {
+        const LayoutHierarchy hierarchy = layoutHierarchy( layout );
+        const SplineGeometry geom =
+            splineGeometry( hierarchy.levels.front(),
+                            hierarchy.level_zero_patches,
+                            [&]( const size_t patch, const Eigen::VectorXd& p ) {
+                                return layoutGlobalPoint( layout, patch, p );
+                            } );
+        const HierarchicalMultiPatchSplineSpace h1 = buildHierarchicalSplineSpace( hierarchy.levels, hierarchy.leaves );
+        const VectorConformingHierarchicalMultiPatchSplineSpace hdiv = buildHDivHierarchicalMultiPatchSplineSpace( h1 );
+        const VectorConformingHierarchicalMultiPatchSplineSpace hcurl =
+            buildHCurlHierarchicalMultiPatchSplineSpace( h1 );
+        std::vector<Eigen::VectorXd> points;
+        for( const double xi : { 0.17, 0.42, 0.83 } ) points.push_back( Eigen::VectorXd::Constant( 1, xi ) );
+        using Space = std::tuple<std::string, const SplineSpace*, TraceKind>;
+        std::vector<std::pair<std::string, ConformityOutcome>> out;
+        for( const auto& [name, ss, kind] : { Space{ "H1", &h1, TraceKind::H1 },
+                                              Space{ "H(div)", &hdiv, TraceKind::HDiv },
+                                              Space{ "H(curl)", &hcurl, TraceKind::HCurl } } )
+            out.emplace_back( name,
+                              fragmentTraceConformity( layout.name + ", " + name + ": ", *ss, kind, geom, points ) );
+        return out;
+    }
+
+    Cell patchTopCellAt3d( const MultiPatchCombinatorialMap& cmap,
+                           const size_t patch_id,
+                           const std::array<size_t, 3>& element )
+    {
+        const FullyUnflattenedDart unflat( { Dart( element[0] ), Dart( element[1] ), Dart( element[2] ) } );
+        return Cell( cmap.toGlobalDart( patch_id, flattenFull( *cmap.constituents().at( patch_id ), unflat ) ),
+                     cmap.dim() );
+    }
+
+    // Two 2x2x2 unit cubes, patch 0's s-max side glued to patch 1's s-min
+    // side.  Patch 0 keeps (1,0,0) coarse and refines the rest; patch 1
+    // refines only the element facing it, so each side is finer somewhere.
+    struct SplitFaceLayout
+    {
+        std::string name;
+        TPPermutation permutation;
+        std::array<size_t, 3> patch_one_refined;
+        std::function<Eigen::VectorXd( const Eigen::VectorXd& )> patch_one_global;
+    };
+
+    std::vector<SplitFaceLayout> splitFaceLayouts()
+    {
+        const auto aligned = []( const Eigen::VectorXd& p ) {
+            return Eigen::VectorXd( Eigen::Vector3d( 1.0 + p( 0 ), p( 1 ), p( 2 ) ) );
+        };
+        // Patch 1's (t, u) meets patch 0's (1 - u, t): a quarter turn about s.
+        const auto quarter_turn = []( const Eigen::VectorXd& p ) {
+            return Eigen::VectorXd( Eigen::Vector3d( 1.0 + p( 0 ), p( 2 ), 1.0 - p( 1 ) ) );
+        };
+        return { { "3D aligned", TPPermutation::ZeroToZero, { 0, 0, 0 }, aligned },
+                 { "3D quarter turn", TPPermutation::ZeroToOne, { 0, 1, 0 }, quarter_turn } };
+    }
+
+    LayoutHierarchy splitFaceHierarchy( const SplitFaceLayout& layout )
+    {
+        const double ptol = 1e-10;
+        const ConstituentSide first{ 0, ElementSide( 0, false ).sideId() };
+        const ConstituentSide second{ 1, ElementSide( 0, true ).sideId() };
+        const InternalConnectionsMap connections = { { first, { layout.permutation, second } },
+                                                     { second, { layout.permutation, first } } };
+        LayoutHierarchy out;
+        for( const KnotVector& kv : { KnotVector( { 0, 0, 0, 0.5, 1, 1, 1 }, ptol ),
+                                      KnotVector( { 0, 0, 0, 0.25, 0.5, 0.75, 1, 1, 1 }, ptol ) } )
+        {
+            const auto patch = makePatch( { kv, kv, kv }, { 2, 2, 2 } );
+            if( out.levels.empty() ) out.level_zero_patches = { patch, patch };
+            out.levels.push_back( std::make_shared<const MultiPatchSplineSpace>(
+                buildH1MultiPatchSplineSpace( { patch, patch }, connections ) ) );
+        }
+        out.leaves.resize( out.levels.size() );
+        const std::array<size_t, 3> patch_zero_coarse{ 1, 0, 0 };
+        for( size_t patch = 0; patch < 2; patch++ )
+            for( size_t i = 0; i < 2; i++ )
+                for( size_t j = 0; j < 2; j++ )
+                    for( size_t k = 0; k < 2; k++ )
+                    {
+                        const std::array<size_t, 3> e{ i, j, k };
+                        if( patch == 0 ? e == patch_zero_coarse : e != layout.patch_one_refined )
+                        {
+                            out.leaves.at( 0 ).push_back(
+                                patchTopCellAt3d( levelCMap( *out.levels.at( 0 ) ), patch, e ) );
+                            continue;
+                        }
+                        for( size_t a = 0; a < 2; a++ )
+                            for( size_t b = 0; b < 2; b++ )
+                                for( size_t c = 0; c < 2; c++ )
+                                    out.leaves.at( 1 ).push_back(
+                                        patchTopCellAt3d( levelCMap( *out.levels.at( 1 ) ),
+                                                          patch,
+                                                          { 2 * i + a, 2 * j + b, 2 * k + c } ) );
+                    }
+        return out;
+    }
+
+    std::vector<std::pair<std::string, ConformityOutcome>> splitFaceTraceConformity( const SplitFaceLayout& layout )
+    {
+        const LayoutHierarchy hierarchy = splitFaceHierarchy( layout );
+        const SplineGeometry geom =
+            splineGeometry( hierarchy.levels.front(),
+                            hierarchy.level_zero_patches,
+                            [&]( const size_t patch, const Eigen::VectorXd& p ) {
+                                return patch == 0 ? p : layout.patch_one_global( p );
+                            } );
+        const HierarchicalMultiPatchSplineSpace h1 = buildHierarchicalSplineSpace( hierarchy.levels, hierarchy.leaves );
+        const VectorConformingHierarchicalMultiPatchSplineSpace hdiv = buildHDivHierarchicalMultiPatchSplineSpace( h1 );
+        const VectorConformingHierarchicalMultiPatchSplineSpace hcurl =
+            buildHCurlHierarchicalMultiPatchSplineSpace( h1 );
+        const std::vector<Eigen::VectorXd> points = {
+            Eigen::Vector2d( 0.17, 0.62 ), Eigen::Vector2d( 0.71, 0.29 ), Eigen::Vector2d( 0.38, 0.88 ) };
+        using Space = std::tuple<std::string, const SplineSpace*, TraceKind>;
+        std::vector<std::pair<std::string, ConformityOutcome>> out;
+        for( const auto& [name, ss, kind] : { Space{ "H1", &h1, TraceKind::H1 },
+                                              Space{ "H(div)", &hdiv, TraceKind::HDiv },
+                                              Space{ "H(curl)", &hcurl, TraceKind::HCurl } } )
+            out.emplace_back( name,
+                              fragmentTraceConformity( layout.name + ", " + name + ": ", *ss, kind, geom, points ) );
+        return out;
+    }
+}
+
+TEST_CASE( "Physical traces agree on patch-interface fragments under asymmetric leaves",
+           "[shared_interface_refinement]" )
+{
+    // The preconditions case's hand-counted fragments per layout.
+    const std::vector<size_t> pairs = { 1, 1, 2, 2, 2, 2, 3, 3, 4, 2, 2 };
+    const std::vector<TwoPatchLayout> layouts = interfaceLayouts();
+    REQUIRE( layouts.size() == pairs.size() );
+    std::vector<std::string> problems;
+    for( size_t i = 0; i < layouts.size(); i++ )
+        for( const auto& [name, o] : layoutTraceConformity( layouts.at( i ) ) )
+        {
+            INFO( layouts.at( i ).name << ", " << name );
+            CHECK( o.records == pairs.at( i ) );
+            CHECK( o.nonzero_shared_trace_observations > 0 );
+            if( name != "H1" ) CHECK( o.full_vector_jump_observations > 0 );
+            problems.insert( problems.end(), o.problems.begin(), o.problems.end() );
+        }
+    INFO( joined( problems ) );
+    CHECK( problems.empty() );
+}
+
+TEST_CASE( "Physical traces agree on 3D patch-interface fragments under asymmetric leaves",
+           "[shared_interface_refinement]" )
+{
+    std::vector<std::string> problems;
+    for( const SplitFaceLayout& layout : splitFaceLayouts() )
+        for( const auto& [name, o] : splitFaceTraceConformity( layout ) )
+        {
+            INFO( layout.name << ", " << name );
+            // Four interface cells, each split into four fragments.
+            CHECK( o.records == 16 );
+            CHECK( o.nonzero_shared_trace_observations > 0 );
+            if( name != "H1" ) CHECK( o.full_vector_jump_observations > 0 );
+            problems.insert( problems.end(), o.problems.begin(), o.problems.end() );
+        }
     INFO( joined( problems ) );
     CHECK( problems.empty() );
 }
