@@ -21,6 +21,7 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -1865,6 +1866,640 @@ TEST_CASE( "Physical traces agree on 3D patch-interface fragments under asymmetr
             CHECK( o.nonzero_shared_trace_observations > 0 );
             if( name != "H1" ) CHECK( o.full_vector_jump_observations > 0 );
             problems.insert( problems.end(), o.problems.begin(), o.problems.end() );
+        }
+    INFO( joined( problems ) );
+    CHECK( problems.empty() );
+}
+
+// Item 1 step 8: the orientation and refinement-direction matrix.  Each patch
+// is a unit cube placed by a rotation (a signed permutation of determinant +1)
+// and a shift.  Expected pairs and fragments come from the placed leaf boxes.
+// A 3D gluing's permutation is the one the rule restated from
+// Stage1_InterfaceTransform_test gives; no production transform is read.
+namespace
+{
+    using Rotation = std::vector<std::vector<int>>; // [placed axis][patch axis]
+    using LeafKey = std::vector<size_t>;            // level, patch, element per axis
+
+    std::vector<Rotation> rotations( const size_t dim )
+    {
+        std::vector<size_t> perm( dim );
+        std::iota( perm.begin(), perm.end(), 0 );
+        std::vector<Rotation> out;
+        do
+        {
+            int perm_sign = 1;
+            for( size_t i = 0; i < dim; i++ )
+                for( size_t j = i + 1; j < dim; j++ )
+                    if( perm.at( i ) > perm.at( j ) ) perm_sign = -perm_sign;
+            for( size_t signs = 0; signs < ( size_t( 1 ) << dim ); signs++ )
+            {
+                Rotation r( dim, std::vector<int>( dim, 0 ) );
+                int det = perm_sign;
+                for( size_t k = 0; k < dim; k++ )
+                {
+                    const int sign = ( signs >> k ) & 1 ? -1 : 1;
+                    r.at( perm.at( k ) ).at( k ) = sign;
+                    det *= sign;
+                }
+                if( det == 1 ) out.push_back( r );
+            }
+        } while( std::next_permutation( perm.begin(), perm.end() ) );
+        return out;
+    }
+
+    struct Placement
+    {
+        Rotation rotation;
+        Eigen::VectorXd shift; // the patch occupies shift + [0, 1]^dim
+    };
+
+    Eigen::VectorXd placed( const Placement& p, const Eigen::VectorXd& x )
+    {
+        Eigen::VectorXd out = p.shift + Eigen::VectorXd::Constant( x.size(), 0.5 );
+        for( Eigen::Index g = 0; g < x.size(); g++ )
+            for( Eigen::Index k = 0; k < x.size(); k++ ) out( g ) += p.rotation.at( g ).at( k ) * ( x( k ) - 0.5 );
+        return out;
+    }
+
+    Eigen::VectorXd unplaced( const Placement& p, const Eigen::VectorXd& y )
+    {
+        Eigen::VectorXd out = Eigen::VectorXd::Constant( y.size(), 0.5 );
+        for( Eigen::Index k = 0; k < y.size(); k++ )
+            for( Eigen::Index g = 0; g < y.size(); g++ )
+                out( k ) += p.rotation.at( g ).at( k ) * ( y( g ) - p.shift( g ) - 0.5 );
+        return out;
+    }
+
+    // The placed axis along which a patch axis runs, and its sign.
+    std::pair<size_t, int> placedAxis( const Rotation& r, const size_t k )
+    {
+        for( size_t g = 0; g < r.size(); g++ )
+            if( r.at( g ).at( k ) != 0 ) return { g, r.at( g ).at( k ) };
+        throw std::runtime_error( "not a rotation" );
+    }
+
+    // A side's outward normal, placed.
+    std::pair<size_t, int> placedNormal( const Rotation& r, const size_t side_id )
+    {
+        const auto [g, sign] = placedAxis( r, side_id / 2 );
+        return { g, side_id % 2 == 1 ? -sign : sign };
+    }
+
+    // The tangential axes of a side, ascending.
+    std::vector<size_t> sideAxes( const size_t dim, const size_t side_id )
+    {
+        std::vector<size_t> out;
+        for( size_t k = 0; k < dim; k++ )
+            if( k != side_id / 2 ) out.push_back( k );
+        return out;
+    }
+
+    // Side coordinates v, in sideAxes order, placed.
+    Eigen::VectorXd placedSidePoint( const Placement& p, const size_t side_id, const Eigen::VectorXd& v )
+    {
+        const size_t dim = p.rotation.size();
+        Eigen::VectorXd x( dim );
+        x( side_id / 2 ) = side_id % 2 == 1 ? 0.0 : 1.0;
+        const std::vector<size_t> axes = sideAxes( dim, side_id );
+        for( size_t d = 0; d < axes.size(); d++ ) x( axes.at( d ) ) = v( d );
+        return placed( p, x );
+    }
+
+    // Restated from Stage1_InterfaceTransform_test: the side-b point meeting
+    // side-a point v is F_b o P o F_a, a flip being 1 - v.  In 2D, P is a
+    // reversal and the flip parity decides it.
+    Eigen::VectorXd ruleImage( const Eigen::VectorXd& v, const size_t sa, const size_t sb, const TPPermutation p )
+    {
+        if( v.size() == 1 )
+        {
+            const auto flips = []( const size_t s ) { return s == 1 or s == 2; };
+            const bool reversed = flips( sa ) == flips( sb );
+            return Eigen::VectorXd::Constant( 1, reversed ? 1.0 - v( 0 ) : v( 0 ) );
+        }
+        const auto flips = []( const size_t s ) { return s == 0 or s == 3 or s == 4; };
+        Eigen::Vector2d w = v;
+        if( flips( sa ) ) w( 0 ) = 1.0 - w( 0 );
+        switch( p )
+        {
+            case TPPermutation::ZeroToZero: w = Eigen::Vector2d( 1.0 - w( 0 ), w( 1 ) ); break;
+            case TPPermutation::ZeroToOne: w = Eigen::Vector2d( 1.0 - w( 1 ), 1.0 - w( 0 ) ); break;
+            case TPPermutation::ZeroToTwo: w = Eigen::Vector2d( w( 0 ), 1.0 - w( 1 ) ); break;
+            case TPPermutation::ZeroToThree: w = Eigen::Vector2d( w( 1 ), w( 0 ) ); break;
+            case TPPermutation::Flip1d: throw std::runtime_error( "Flip1d is not a 3D permutation" );
+        }
+        if( flips( sb ) ) w( 0 ) = 1.0 - w( 0 );
+        return w;
+    }
+
+    bool placementFollowsRule( const Placement& pa,
+                               const size_t sa,
+                               const Placement& pb,
+                               const size_t sb,
+                               const TPPermutation p )
+    {
+        const size_t rank = pa.rotation.size() - 1;
+        for( const Eigen::Vector2d& v : { Eigen::Vector2d( 0.2, 0.7 ), Eigen::Vector2d( 0.9, 0.4 ) } )
+        {
+            const Eigen::VectorXd u = v.head( rank );
+            if( ( placedSidePoint( pa, sa, u ) - placedSidePoint( pb, sb, ruleImage( u, sa, sb, p ) ) ).norm() >
+                geom_tol )
+                return false;
+        }
+        return true;
+    }
+
+    struct PlacedLayout
+    {
+        std::string name;
+        std::string orientation; // the interface's class
+        std::vector<Placement> patches;
+        InternalConnectionsMap connections;
+        std::set<size_t> refined_axes;                               // placed axes bisected at level 1
+        std::vector<std::pair<size_t, std::vector<size_t>>> refined; // patch, placed level-0 element
+        size_t expected_records = 0;
+    };
+
+    void glue( PlacedLayout& layout, const size_t pa, const size_t sa, const size_t pb, const size_t sb )
+    {
+        std::vector<TPPermutation> candidates = { TPPermutation::Flip1d };
+        if( layout.patches.front().rotation.size() == 3 )
+            candidates = { TPPermutation::ZeroToZero,
+                           TPPermutation::ZeroToOne,
+                           TPPermutation::ZeroToTwo,
+                           TPPermutation::ZeroToThree };
+        std::vector<TPPermutation> matches;
+        for( const TPPermutation p : candidates )
+            if( placementFollowsRule( layout.patches.at( pa ), sa, layout.patches.at( pb ), sb, p ) )
+                matches.push_back( p );
+        if( matches.size() != 1 )
+            throw std::runtime_error( layout.name + ": " + std::to_string( matches.size() ) +
+                                      " permutations follow the rule" );
+        const ConstituentSide a{ pa, sa };
+        const ConstituentSide b{ pb, sb };
+        layout.connections.emplace( a, std::pair{ matches.front(), b } );
+        layout.connections.emplace( b, std::pair{ matches.front(), a } );
+    }
+
+    std::string permutationName( const TPPermutation p )
+    {
+        switch( p )
+        {
+            case TPPermutation::ZeroToZero: return "ZeroToZero";
+            case TPPermutation::ZeroToOne: return "ZeroToOne";
+            case TPPermutation::ZeroToTwo: return "ZeroToTwo";
+            case TPPermutation::ZeroToThree: return "ZeroToThree";
+            case TPPermutation::Flip1d: return "Flip1d";
+        }
+        return "?";
+    }
+
+    // Whether side b's first tangential axis runs along a different placed
+    // axis than side a's, and how many tangential axes run opposite ways.
+    std::pair<bool, size_t>
+        sideClass( const Placement& pa, const size_t sa, const Placement& pb, const size_t sb )
+    {
+        const size_t dim = pa.rotation.size();
+        const std::vector<size_t> ta = sideAxes( dim, sa );
+        const std::vector<size_t> tb = sideAxes( dim, sb );
+        const bool swapped = placedAxis( pa.rotation, ta.front() ).first != placedAxis( pb.rotation, tb.front() ).first;
+        size_t reversed = 0;
+        for( const size_t ka : ta )
+            for( const size_t kb : tb )
+            {
+                const auto [ga, sign_a] = placedAxis( pa.rotation, ka );
+                const auto [gb, sign_b] = placedAxis( pb.rotation, kb );
+                if( ga == gb and sign_a != sign_b ) reversed++;
+            }
+        return { swapped, reversed };
+    }
+
+    // Patch 0 turned so that its side a faces +x; patch 1 turned by each
+    // rotation and shifted by one along x, so that one of its sides meets
+    // side a.  Level 1 bisects y (and x in 3D), so a 3D face is refined along
+    // one tangential axis only.  Patch 0 refines the interface elements
+    // except the one at the origin; patch 1 refines only the one facing it.
+    std::vector<PlacedLayout> twoPatchPlacedLayouts( const size_t dim )
+    {
+        const std::vector<Rotation> all = rotations( dim );
+        std::vector<PlacedLayout> out;
+        for( size_t sa = 0; sa < 2 * dim; sa++ )
+        {
+            const auto r0 = std::find_if( all.begin(), all.end(), [&]( const Rotation& r ) {
+                return placedNormal( r, sa ) == std::pair<size_t, int>{ 0, 1 };
+            } );
+            for( const Rotation& r1 : all )
+            {
+                size_t sb = 0;
+                while( placedNormal( r1, sb ) != std::pair<size_t, int>{ 0, -1 } ) sb++;
+                PlacedLayout layout;
+                layout.patches = { { *r0, Eigen::VectorXd::Zero( dim ) }, { r1, Eigen::VectorXd::Unit( dim, 0 ) } };
+                glue( layout, 0, sa, 1, sb );
+                const auto [swapped, reversed] = sideClass( layout.patches.at( 0 ), sa, layout.patches.at( 1 ), sb );
+                std::ostringstream orientation;
+                if( dim == 3 )
+                    orientation << permutationName( layout.connections.begin()->second.first )
+                                << ( swapped ? ", swapped, " : ", axis-preserving, " );
+                orientation << reversed << " reversed";
+                layout.orientation = orientation.str();
+                layout.name = std::to_string( dim ) + "D sides " + std::to_string( sa ) + "/" + std::to_string( sb ) +
+                              ", " + layout.orientation;
+                layout.refined_axes = dim == 2 ? std::set<size_t>{ 1 } : std::set<size_t>{ 0, 1 };
+                for( size_t e = 0; e < ( size_t( 1 ) << ( dim - 1 ) ); e++ )
+                {
+                    std::vector<size_t> element{ 1 };
+                    for( size_t k = 0; k + 1 < dim; k++ ) element.push_back( ( e >> k ) & 1 );
+                    if( e != 0 ) layout.refined.push_back( { 0, element } );
+                }
+                layout.refined.push_back( { 1, std::vector<size_t>( dim, 0 ) } );
+                layout.expected_records = size_t( 2 ) << ( dim - 1 );
+                out.push_back( layout );
+            }
+        }
+        return out;
+    }
+
+    struct PlacedLeaf
+    {
+        LeafKey key;
+        Eigen::VectorXd lo, hi;             // placed box
+        Eigen::VectorXd patch_lo, patch_hi; // in patch coordinates
+    };
+
+    size_t elementsAlong( const PlacedLayout& layout, const size_t level, const size_t patch, const size_t k )
+    {
+        const bool bisected =
+            layout.refined_axes.contains( placedAxis( layout.patches.at( patch ).rotation, k ).first );
+        return level > 0 and bisected ? 4 : 2;
+    }
+
+    std::vector<PlacedLeaf> placedLeaves( const PlacedLayout& layout )
+    {
+        const size_t dim = layout.patches.front().rotation.size();
+        std::vector<PlacedLeaf> out;
+        for( size_t patch = 0; patch < layout.patches.size(); patch++ )
+        {
+            const Placement& pl = layout.patches.at( patch );
+            for( size_t e = 0; e < ( size_t( 1 ) << dim ); e++ )
+            {
+                std::vector<size_t> element;
+                for( size_t g = 0; g < dim; g++ ) element.push_back( ( e >> g ) & 1 );
+                const bool refined = std::find( layout.refined.begin(),
+                                                layout.refined.end(),
+                                                std::pair{ patch, element } ) != layout.refined.end();
+                const size_t n_children = refined ? size_t( 1 ) << layout.refined_axes.size() : 1;
+                for( size_t c = 0; c < n_children; c++ )
+                {
+                    PlacedLeaf leaf;
+                    leaf.lo = pl.shift;
+                    leaf.hi = pl.shift;
+                    size_t bit = 0;
+                    for( size_t g = 0; g < dim; g++ )
+                    {
+                        const bool split = refined and layout.refined_axes.contains( g );
+                        const double h = split ? 0.25 : 0.5;
+                        leaf.lo( g ) += 0.5 * element.at( g ) + ( split ? h * ( ( c >> bit++ ) & 1 ) : 0.0 );
+                        leaf.hi( g ) = leaf.lo( g ) + h;
+                    }
+                    const Eigen::VectorXd a = unplaced( pl, leaf.lo );
+                    const Eigen::VectorXd b = unplaced( pl, leaf.hi );
+                    leaf.patch_lo = a.cwiseMin( b );
+                    leaf.patch_hi = a.cwiseMax( b );
+                    const size_t level = refined ? 1 : 0;
+                    leaf.key = { level, patch };
+                    for( size_t k = 0; k < dim; k++ )
+                        leaf.key.push_back( static_cast<size_t>(
+                            std::lround( leaf.patch_lo( k ) * elementsAlong( layout, level, patch, k ) ) ) );
+                    out.push_back( leaf );
+                }
+            }
+        }
+        return out;
+    }
+
+    // The face two placed boxes share, degenerate along its normal; empty
+    // unless its measure is positive.
+    std::optional<std::pair<Eigen::VectorXd, Eigen::VectorXd>> sharedFace( const PlacedLeaf& a, const PlacedLeaf& b )
+    {
+        const Eigen::VectorXd lo = a.lo.cwiseMax( b.lo );
+        const Eigen::VectorXd hi = a.hi.cwiseMin( b.hi );
+        size_t touching = 0;
+        for( Eigen::Index g = 0; g < lo.size(); g++ )
+        {
+            if( std::abs( hi( g ) - lo( g ) ) < geom_tol )
+                touching++;
+            else if( hi( g ) < lo( g ) )
+                return std::nullopt;
+        }
+        if( touching != 1 ) return std::nullopt;
+        return std::pair{ lo, hi };
+    }
+
+    Cell patchTopCellNd( const MultiPatchCombinatorialMap& cmap, const size_t patch_id, const LeafKey& key )
+    {
+        SmallVector<Dart, 3> darts;
+        for( size_t k = 2; k < key.size(); k++ ) darts.push_back( Dart( key.at( k ) ) );
+        return Cell( cmap.toGlobalDart(
+                         patch_id, flattenFull( *cmap.constituents().at( patch_id ), FullyUnflattenedDart( darts ) ) ),
+                     cmap.dim() );
+    }
+
+    LeafKey levelKey( const MultiPatchCombinatorialMap& level_cmap, const size_t level, const Cell& c )
+    {
+        const auto [patch, d] = level_cmap.toLocalDart( c.dart() );
+        LeafKey out{ level, patch };
+        for( const Dart& u : unflattenFull( *level_cmap.constituents().at( patch ), d ).unflat_darts )
+            out.push_back( u.id() );
+        return out;
+    }
+
+    // Throws unless the element is named by a leaf dart.
+    LeafKey leafKeyOf( const HierarchicalMultiPatchCombinatorialMap& cmap, const Cell& element )
+    {
+        const auto [level, level_d] = cmap.unrefinedAncestorDartOfCell( element );
+        return levelKey( *cmap.refinementLevels().at( level ), level, Cell( level_d, cmap.dim() ) );
+    }
+
+    std::string describe( const LeafKey& k )
+    {
+        std::ostringstream out;
+        out << "p" << k.at( 1 ) << " L" << k.at( 0 ) << " (";
+        for( size_t i = 2; i < k.size(); i++ ) out << ( i > 2 ? "," : "" ) << k.at( i );
+        out << ")";
+        return out.str();
+    }
+
+    LayoutHierarchy placedHierarchy( const PlacedLayout& layout, const std::vector<PlacedLeaf>& leaves )
+    {
+        const double ptol = 1e-10;
+        const size_t dim = layout.patches.front().rotation.size();
+        LayoutHierarchy out;
+        out.leaves.resize( 2 );
+        for( size_t level = 0; level < 2; level++ )
+        {
+            std::vector<std::shared_ptr<const TPSplineSpace>> patches;
+            for( size_t patch = 0; patch < layout.patches.size(); patch++ )
+            {
+                SmallVector<KnotVector, 3> kvs;
+                for( size_t k = 0; k < dim; k++ )
+                {
+                    const size_t n = elementsAlong( layout, level, patch, k );
+                    std::vector<double> knots{ 0, 0 };
+                    for( size_t i = 0; i <= n; i++ ) knots.push_back( double( i ) / double( n ) );
+                    knots.insert( knots.end(), { 1, 1 } );
+                    kvs.push_back( KnotVector( knots, ptol ) );
+                }
+                patches.push_back( makePatch( kvs, SmallVector<size_t, 3>( dim, 2 ) ) );
+            }
+            if( level == 0 ) out.level_zero_patches = patches;
+            out.levels.push_back( std::make_shared<const MultiPatchSplineSpace>(
+                buildH1MultiPatchSplineSpace( patches, layout.connections ) ) );
+        }
+        for( const PlacedLeaf& leaf : leaves )
+            out.leaves.at( leaf.key.at( 0 ) )
+                .push_back(
+                    patchTopCellNd( levelCMap( *out.levels.at( leaf.key.at( 0 ) ) ), leaf.key.at( 1 ), leaf.key ) );
+        return out;
+    }
+
+    struct PlacedOutcome
+    {
+        std::vector<std::string> problems;
+        size_t expected_records = 0;
+        std::vector<std::pair<std::string, ConformityOutcome>> traces;
+    };
+
+    // Requested leaves are the effective leaves; each record pairs two leaves
+    // whose placed boxes share a face, once, and both sides place the
+    // fragment's corners on that face's corners.  Then physical traces.
+    PlacedOutcome placedLayoutOutcome( const PlacedLayout& layout )
+    {
+        PlacedOutcome out;
+        const size_t dim = layout.patches.front().rotation.size();
+        const std::string prefix = layout.name + ", ";
+        const std::vector<PlacedLeaf> leaves = placedLeaves( layout );
+        std::map<LeafKey, const PlacedLeaf*> by_key;
+        for( const PlacedLeaf& leaf : leaves )
+        {
+            if( not by_key.emplace( leaf.key, &leaf ).second )
+                out.problems.push_back( prefix + "duplicate leaf " + describe( leaf.key ) );
+            for( size_t k = 0; k < dim; k++ )
+            {
+                const double n = elementsAlong( layout, leaf.key.at( 0 ), leaf.key.at( 1 ), k );
+                if( std::abs( leaf.patch_lo( k ) - leaf.key.at( k + 2 ) / n ) > geom_tol or
+                    std::abs( leaf.patch_hi( k ) - ( leaf.key.at( k + 2 ) + 1 ) / n ) > geom_tol )
+                    out.problems.push_back( prefix + describe( leaf.key ) + " is not an element" );
+            }
+        }
+        std::map<std::pair<LeafKey, LeafKey>, std::pair<Eigen::VectorXd, Eigen::VectorXd>> expected;
+        for( const PlacedLeaf& a : leaves )
+            for( const PlacedLeaf& b : leaves )
+                if( a.key.at( 1 ) < b.key.at( 1 ) )
+                    if( const auto face = sharedFace( a, b ) ) expected.emplace( std::pair{ a.key, b.key }, *face );
+        out.expected_records = expected.size();
+
+        const LayoutHierarchy hierarchy = placedHierarchy( layout, leaves );
+        const HierarchicalMultiPatchSplineSpace h1 = buildHierarchicalSplineSpace( hierarchy.levels, hierarchy.leaves );
+        const VectorConformingHierarchicalMultiPatchSplineSpace hdiv = buildHDivHierarchicalMultiPatchSplineSpace( h1 );
+        const VectorConformingHierarchicalMultiPatchSplineSpace hcurl =
+            buildHCurlHierarchicalMultiPatchSplineSpace( h1 );
+        using Space = std::tuple<std::string, const SplineSpace*, TraceKind>;
+        const std::vector<Space> spaces = { Space{ "H1", &h1, TraceKind::H1 },
+                                            Space{ "H(div)", &hdiv, TraceKind::HDiv },
+                                            Space{ "H(curl)", &hcurl, TraceKind::HCurl } };
+
+        std::vector<Eigen::VectorXd> corners;
+        for( size_t c = 0; c < ( size_t( 1 ) << ( dim - 1 ) ); c++ )
+        {
+            Eigen::VectorXd xi( dim - 1 );
+            for( size_t d = 0; d + 1 < dim; d++ ) xi( d ) = ( c >> d ) & 1;
+            corners.push_back( xi );
+        }
+        std::vector<Eigen::VectorXd> fragment_points = corners;
+        fragment_points.push_back( Eigen::Vector2d( 0.3, 0.7 ).head( dim - 1 ) );
+
+        for( const auto& [name, ss, kind] : spaces )
+        {
+            const std::string where = prefix + name + ": ";
+            const auto& cmap = dynamic_cast<const HierarchicalMultiPatchCombinatorialMap&>(
+                ss->basisComplex().parametricAtlas().cmap() );
+
+            // Action (b): leafElements returns the requested leaves.
+            std::multiset<LeafKey> effective;
+            const std::vector<std::vector<Cell>> leaf_cells = leafElements( cmap );
+            for( size_t level = 0; level < leaf_cells.size(); level++ )
+                for( const Cell& c : leaf_cells.at( level ) )
+                    effective.insert( levelKey( *cmap.refinementLevels().at( level ), level, c ) );
+            std::multiset<LeafKey> requested;
+            for( const auto& [k, leaf] : by_key ) requested.insert( k );
+            if( effective != requested )
+                out.problems.push_back( where + "leafElements differs from the requested leaves" );
+
+            std::multiset<std::pair<LeafKey, LeafKey>> actual;
+            for( const TraceMeshInterface& iface : patchTraceMeshInterfaces( *ss ) )
+            {
+                if( iface.type != TraceMeshEntityType::PatchInterface or not iface.second.has_value() )
+                {
+                    out.problems.push_back( where + "a record is not a two-sided patch interface" );
+                    continue;
+                }
+                std::array<LeafKey, 2> keys;
+                const std::array<const TraceMeshSide*, 2> sides = { &iface.first, &*iface.second };
+                try
+                {
+                    for( size_t i = 0; i < 2; i++ ) keys.at( i ) = leafKeyOf( cmap, sides.at( i )->element );
+                }
+                catch( const std::exception& e )
+                {
+                    out.problems.push_back( where + "a side is not named by a leaf dart: " + e.what() );
+                    continue;
+                }
+                const std::string text = describe( keys.at( 0 ) ) + " / " + describe( keys.at( 1 ) );
+                bool known = true;
+                for( size_t i = 0; i < 2; i++ )
+                {
+                    if( keys.at( i ).at( 0 ) != sides.at( i )->level or
+                        keys.at( i ).at( 1 ) != sides.at( i )->patch_id )
+                        out.problems.push_back( where + "record fields disagree with " + text );
+                    if( not by_key.contains( keys.at( i ) ) )
+                    {
+                        out.problems.push_back( where + "non-leaf " + describe( keys.at( i ) ) );
+                        known = false;
+                    }
+                }
+                const auto pair = keys.at( 0 ).at( 1 ) < keys.at( 1 ).at( 1 ) ? std::pair{ keys.at( 0 ), keys.at( 1 ) }
+                                                                              : std::pair{ keys.at( 1 ), keys.at( 0 ) };
+                actual.insert( pair );
+                const auto face = expected.find( pair );
+                if( not known or face == expected.end() ) continue;
+
+                std::array<std::vector<Eigen::VectorXd>, 2> images;
+                try
+                {
+                    for( size_t i = 0; i < 2; i++ )
+                    {
+                        const TraceMeshSide& side = *sides.at( i );
+                        const PlacedLeaf& leaf = *by_key.at( keys.at( i ) );
+                        for( const Eigen::VectorXd& xi : fragment_points )
+                        {
+                            const Eigen::VectorXd y = embedTraceFragmentPoint( side.embedding, xi );
+                            Eigen::VectorXd x( dim );
+                            x( side.side.axis ) = side.side.lower ? leaf.patch_lo( side.side.axis )
+                                                                  : leaf.patch_hi( side.side.axis );
+                            const std::vector<size_t> axes = sideAxes( dim, side.side.sideId() );
+                            for( size_t d = 0; d < axes.size(); d++ )
+                                x( axes.at( d ) ) =
+                                    leaf.patch_lo( axes.at( d ) ) +
+                                    y( d ) * ( leaf.patch_hi( axes.at( d ) ) - leaf.patch_lo( axes.at( d ) ) );
+                            images.at( i ).push_back( placed( layout.patches.at( side.patch_id ), x ) );
+                        }
+                    }
+                }
+                catch( const std::exception& e )
+                {
+                    out.problems.push_back( where + text + ": " + e.what() );
+                    continue;
+                }
+                for( size_t c = 0; c < fragment_points.size(); c++ )
+                    if( ( images.at( 0 ).at( c ) - images.at( 1 ).at( c ) ).norm() > geom_tol )
+                        out.problems.push_back( where + text + ": the sides place a fragment point apart" );
+                const auto& [lo, hi] = face->second;
+                std::set<std::vector<long>> distinct;
+                for( size_t c = 0; c < corners.size(); c++ )
+                {
+                    const Eigen::VectorXd& x = images.at( 0 ).at( c );
+                    std::vector<long> corner;
+                    for( size_t g = 0; g < dim; g++ )
+                    {
+                        const bool at_lo = std::abs( x( g ) - lo( g ) ) < geom_tol;
+                        if( not at_lo and std::abs( x( g ) - hi( g ) ) >= geom_tol )
+                            out.problems.push_back( where + text + ": a fragment corner is off the shared face" );
+                        corner.push_back( at_lo ? 0 : 1 );
+                    }
+                    distinct.insert( corner );
+                }
+                if( distinct.size() != corners.size() )
+                    out.problems.push_back( where + text + ": the fragment is not the shared face" );
+            }
+            for( const auto& pair : actual )
+            {
+                const std::string text = describe( pair.first ) + " / " + describe( pair.second );
+                if( actual.count( pair ) > 1 ) out.problems.push_back( where + "duplicate " + text );
+                if( not expected.contains( pair ) ) out.problems.push_back( where + "unexpected " + text );
+            }
+            for( const auto& [pair, face] : expected )
+                if( not actual.contains( pair ) )
+                    out.problems.push_back( where + "missing " + describe( pair.first ) + " / " +
+                                            describe( pair.second ) );
+        }
+
+        const SplineGeometry geom =
+            splineGeometry( hierarchy.levels.front(),
+                            hierarchy.level_zero_patches,
+                            [&]( const size_t patch, const Eigen::VectorXd& p ) {
+                                return placed( layout.patches.at( patch ), p );
+                            } );
+        std::vector<Eigen::VectorXd> points;
+        if( dim == 2 )
+            for( const double xi : { 0.17, 0.42, 0.83 } ) points.push_back( Eigen::VectorXd::Constant( 1, xi ) );
+        else
+            points = { Eigen::Vector2d( 0.17, 0.62 ), Eigen::Vector2d( 0.71, 0.29 ), Eigen::Vector2d( 0.38, 0.88 ) };
+        for( const auto& [name, ss, kind] : spaces )
+            out.traces.emplace_back( name, fragmentTraceConformity( prefix + name + ": ", *ss, kind, geom, points ) );
+        return out;
+    }
+}
+
+TEST_CASE( "Placed two-patch layouts: every side pair and permutation once", "[shared_interface_refinement]" )
+{
+    std::map<std::string, size_t> classes;
+    for( const size_t dim : { size_t( 2 ), size_t( 3 ) } )
+    {
+        std::set<std::tuple<size_t, size_t, TPPermutation>> triples;
+        const std::vector<PlacedLayout> layouts = twoPatchPlacedLayouts( dim );
+        for( const PlacedLayout& layout : layouts )
+        {
+            const auto& [a, glued] = *layout.connections.begin();
+            triples.insert( { a.side_id, glued.second.side_id, glued.first } );
+            classes[std::to_string( dim ) + "D " + layout.orientation]++;
+        }
+        CHECK( layouts.size() == ( dim == 2 ? 16 : 144 ) );
+        CHECK( triples.size() == layouts.size() );
+    }
+    const std::map<std::string, size_t> expected = { { "2D 0 reversed", 8 },
+                                                     { "2D 1 reversed", 8 },
+                                                     { "3D ZeroToOne, swapped, 0 reversed", 9 },
+                                                     { "3D ZeroToOne, swapped, 1 reversed", 18 },
+                                                     { "3D ZeroToOne, swapped, 2 reversed", 9 },
+                                                     { "3D ZeroToThree, swapped, 0 reversed", 9 },
+                                                     { "3D ZeroToThree, swapped, 1 reversed", 18 },
+                                                     { "3D ZeroToThree, swapped, 2 reversed", 9 },
+                                                     { "3D ZeroToTwo, axis-preserving, 1 reversed", 18 },
+                                                     { "3D ZeroToTwo, axis-preserving, 2 reversed", 18 },
+                                                     { "3D ZeroToZero, axis-preserving, 0 reversed", 18 },
+                                                     { "3D ZeroToZero, axis-preserving, 1 reversed", 18 } };
+    CHECK( classes == expected );
+}
+
+TEST_CASE( "Placed two-patch layouts: leaves, fragments and physical traces under asymmetric leaves",
+           "[shared_interface_refinement]" )
+{
+    std::vector<std::string> problems;
+    for( const size_t dim : { size_t( 2 ), size_t( 3 ) } )
+        for( const PlacedLayout& layout : twoPatchPlacedLayouts( dim ) )
+        {
+            INFO( layout.name );
+            const PlacedOutcome o = placedLayoutOutcome( layout );
+            CHECK( o.expected_records == layout.expected_records );
+            problems.insert( problems.end(), o.problems.begin(), o.problems.end() );
+            for( const auto& [name, t] : o.traces )
+            {
+                INFO( name );
+                CHECK( t.records == layout.expected_records );
+                CHECK( t.nonzero_shared_trace_observations > 0 );
+                if( name != "H1" ) CHECK( t.full_vector_jump_observations > 0 );
+                problems.insert( problems.end(), t.problems.begin(), t.problems.end() );
+            }
         }
     INFO( joined( problems ) );
     CHECK( problems.empty() );

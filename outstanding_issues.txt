@@ -997,8 +997,9 @@ MEDIUM PRIORITY — Architectural / Correctness
      6. Interface fragments and side embeddings; repair one-to-many
         enumeration.  [DONE with items 16-18: 2c98828; STEP 6 below]
      7. Off-node physical H1, H(div) and H(curl) trace tests.
-        [DONE: STEP 7 below; uncommitted]
+        [DONE: STEP 7 below; 48a8047]
      8. 2D/3D orientation, refinement-direction, junction and cycle matrix.
+        [IN PROGRESS: STEP 8 below]
      9. A separate discrete-complex gate: composition to zero, plus
         rank/nullity exactness on a contractible fixture.
     10. Documentation, full suite, then automatic AMR.
@@ -1592,7 +1593,7 @@ MEDIUM PRIORITY — Architectural / Correctness
      COMMITTED 2026-10-22 by the user as 2c98828 "Support asymmetric
        multipatch trace refinement", with the step-5 ledger follow-up
        folded in (all 18 of its added lines are in 2c98828).
-     STEP 7 (2026-10-23; uncommitted).  Off-node physical traces on the
+     STEP 7 (2026-10-23; committed 48a8047).  Off-node physical traces on the
        step-6 fragments (test/SharedInterfaceRefinement_test.cpp, two
        cases).  Done in two halves.  The 2D half stopped for vetting; the
        user's review the same day accepted its gate, asked for the
@@ -1683,6 +1684,137 @@ MEDIUM PRIORITY — Architectural / Correctness
        workflow limitation are narrowed to what P4 and P5 show; "C0 but
        not C1" is removed from the test comment and the Geometry
        paragraph, since the test does not measure geometric regularity.
+     COMMITTED 2026-10-26 by the user as 48a8047 "Verify physical traces
+       across asymmetric multipatch refinement".
+     STEP 8 (2026-10-27; first half, uncommitted).  The orientation and
+       refinement-direction matrix (test/SharedInterfaceRefinement_test.cpp,
+       two cases).  Done in two halves.  This half covers every gluing of
+       two unit cubes; it stops for vetting before the junction and cycle
+       half proposed at the end.
+     Layouts.  Each patch is a unit cube placed by a rotation (a signed
+       permutation matrix of determinant +1) and a shift.  For each side sa,
+       patch 0 takes the first rotation that turns sa's outward normal to
+       +x.  Patch 1, shifted by e_x, takes every rotation in turn; sb is its
+       side facing -x.  2D: 4 x 4 = 16 layouts; 3D: 6 x 24 = 144.  The
+       declared permutation is the one candidate under which the rule
+       restated from Stage1_InterfaceTransform_test (the map F_b o P o F_a)
+       agrees with the placement at two sample points.  glue() throws
+       unless exactly one candidate does.  No production transform is read.
+       The coverage case checks that the (sa, sb, P) triples are distinct
+       and pins the class counts.  "Swapped" and the number of reversed
+       axes are read from the placed geometry, not from P:
+         2D  0 reversed 8, 1 reversed 8
+         3D  ZeroToZero   axis-preserving  0 reversed 18, 1 reversed 18
+             ZeroToTwo    axis-preserving  1 reversed 18, 2 reversed 18
+             ZeroToOne    swapped  0 reversed 9, 1 reversed 18, 2 reversed 9
+             ZeroToThree  swapped  0 reversed 9, 1 reversed 18, 2 reversed 9
+     Refinement.  Level 1 bisects placed y in 2D, and placed x and y in 3D;
+       placed z is not refined.  So a 3D interface is refined along one
+       tangent only, and a swapped side's two scales differ.  Patch 0
+       refines every interface element except the one at placed y = z = 0.
+       Patch 1 refines only the element facing that one.  Refinement
+       therefore comes from either patch, and each side has more than one
+       fine element along the interface: 4 records in 2D, 8 in 3D.  Degree
+       2, uniform open knots, 2 elements per axis at level 0.  The geometry
+       is the rigid placement itself, so the Piola maps reduce to rotations;
+       step 7 covers a curved map.
+     Checks, per space (H1, H(div), H(curl)).  Preconditions: no leaf is
+       requested twice, and each requested leaf is an element of its patch.
+       leafElements() equals the requested leaves as a multiset (action
+       (b)).  Every patch-interface record is two-sided, and both sides are
+       leaf darts whose level and patch fields match.  Both are requested
+       leaves, and their placed boxes share a face.  The fragment's corners
+       and one interior point are mapped through each side's embedding into
+       its leaf box and then placed; the two sides must agree, and the
+       corners must land on distinct corners of the shared face.  No pair is
+       duplicated, unexpected or missing.  Then fragmentTraceConformity
+       (step 7) runs on a geometry built from the placement, at 0.17, 0.42,
+       0.83 (2D) and (0.17, 0.62), (0.71, 0.29), (0.38, 0.88) (3D).
+     MEASURED counts (P0 instrumentation, summed over layouts).  As in step
+       7, the last two columns count observations:
+                       records  comparisons  nonzero  jumps
+         2D  H1            64        2880       576      0
+             H(div)        64        4320       384    384
+             H(curl)       64        4320       384    384
+         3D  H1          1152      168480     29088      0
+             H(div)      1152      247104     13824  13824
+             H(curl)     1152      358560     41472  41472
+       Embedding kinds, identical in all three spaces.
+         2D: 16 partial second sides with reversed axes.
+         3D first sides (patch 0, identity axes): 288 partial, all with
+           anisotropic scale, and 864 whole.
+         3D second sides: 756 partial with moved axes; 108 partial with
+           identity axes (all partial ones anisotropic); 252 whole with
+           moved axes; 36 whole with identity axes.
+     Bypass probes, MEASURED.  Each probe edits one file, runs this case and
+       step 7's 3D case, then restores the file byte-identical (cmp) and
+       rebuilds green.  "Both checks" means that the fragment-placement
+       check and fragmentTraceConformity each flag the layout, in every
+       space.
+       P1a embedTraceFragmentPoint takes scale_d from the source axis,
+          scale.at( source_axis_for_destination[d] ).  Exactly the 72
+          swapped 3D layouts fail, by both checks.  No 2D or
+          axis-preserving layout fails.  Step 7's 3D fixtures pass: their
+          refinement is isotropic, so swapping scales changes nothing there.
+          This substitution is caught only by the anisotropic matrix.
+       P1b The same change, applied to the offset.  The same 72 layouts
+          fail, by both checks.  Step 7's quarter turn also fails.
+       P2 Every source_axis_reversed is treated as false.  Exactly the 116
+          layouts with a reversed axis fail (8 in 2D, 108 in 3D), by both
+          checks.  No "0 reversed" layout fails.  Step 7's quarter turn
+          also fails.
+       P3 (test side) glue() declares the first candidate other than the
+          rule's.  All 144 3D layouts are caught:
+           - 108 throw at construction (MultiPatchSplineSpace.cpp:92,
+             "Strong multipatch coupling requires matching tangential spline
+             parameterizations ...").  The wrong P changes whether the side
+             axes are swapped, so the anisotropic level-1 knots disagree.
+           - The other 36 are the layouts whose true P is ZeroToTwo,
+             declared as ZeroToZero.  Both are axis-preserving, and uniform
+             knots match under reversal, so these build.  They fail the
+             record checks (unexpected and missing pairs) before any
+             geometry is made.
+          2D has a single candidate, so P3 leaves 2D unchanged.  A first
+          count of 126 tallied by layout name, and the names collide under
+          P3; the rerun indexed by layout gives 144.
+       Bounds.  Each probe shows only that its own substitution is caught
+          on these fixtures.  P3 tried one wrong permutation per layout.
+     Evidence.  EXHAUSTIVELY VERIFIED over a finite family: every gluing of
+       two unit cubes by a rotation passes, i.e. every (sa, sb, P) triple
+       (16 in 2D, 144 in 3D), in all three spaces.  This holds for one
+       refinement pattern, one degree and one knot layout, under affine
+       geometry.  It says nothing about other leaf patterns, degrees,
+       non-uniform knots or more than two patches.  Action (b) is MEASURED
+       for two patches in 2D and 3D (160 layouts, three spaces) and stays
+       open until the second half.
+     Runs.  SIR 11814 assertions in 12 cases, 11.8 s for the whole binary;
+       full ctest 238/238.  No added SIR line exceeds 120 columns.
+     SECOND HALF, PROPOSED (not started).  The same placed unit cubes, with
+       glue() on every pair of touching faces.  placedLayoutOutcome is
+       unchanged; it already takes N patches.  Expected pairs come from
+       every two placed leaf boxes that share a face, and diagonal
+       neighbours share none.
+         2D: four squares around a vertex (a cycle of four interfaces).
+         3D: four cubes around an edge (a cycle of four interfaces around
+           it).
+       Rotations are mixed so that the cycle has reversed interfaces, and
+       swapped ones in 3D.  Refinement is asymmetric at the junction: two
+       diagonal patches refine the elements at the shared vertex or edge,
+       and the other two do not; 3D refinement is anisotropic as above.
+       This is the case AMENDED E11 asks for, and it would close action (b)
+       for more than two patches.  splineGeometry's control-point check
+       would then also require that a function shared by all four patches
+       is merged consistently around the cycle.
+       Questions for vetting:
+         (i) Rotation coverage.  2D can take all 4^4 = 256 assignments.
+             3D cannot take all 24^4, so either all 24 rotations for one
+             patch with the rest fixed, or a set chosen so that each of the
+             four permutations appears on the cycle.
+         (ii) Whether a 3D vertex junction (eight cubes) is also wanted.
+         (iii) Whether an L-shaped three-patch corner (a boundary junction)
+             is also wanted.
+       Interior vertices of valence other than four cannot be built from
+       axis-aligned cubes, so they stay out of scope here.
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces
