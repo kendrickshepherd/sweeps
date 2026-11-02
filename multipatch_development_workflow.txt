@@ -199,13 +199,18 @@ multipatch and vector hierarchical spaces (item 1, STEP 5 FIX).
 Cross-patch coarse-fine interface fragments with affine side embeddings
 (item 1 step 6) and off-node physical trace agreement on them (step 7: H1
 values, H(div) normal and H(curl) tangential traces) are verified on 11 2D
-two-patch layouts and two 3D split-face fixtures.
+two-patch layouts and two 3D split-face fixtures. Step 8 extends this to
+every positive-orientation rigid gluing class of two unit squares or cubes
+(16 in 2D, 144 in 3D) under one anisotropic refinement pattern, and to five
+selected four-patch cycles (two around a 2D vertex, three around a 3D edge)
+with the diagonal patches refined at the junction.
 
 Not yet verified (outstanding_issues.txt item 1):
 
   - leaf-level jumps above two, or in 3D,
-  - other 3D orientation classes, junctions and cycles (step 8), and
-    discrete-complex exactness (step 9).
+  - eight cubes around a vertex, and other degrees, knots or leaf patterns
+    in the step 8 matrix, and
+  - discrete-complex exactness (step 9).
 
 Truly nonmatching patch meshes remain a future mortar or weak-coupling problem.
 
@@ -253,11 +258,14 @@ Current limitations:
     Physical weak integration across such interfaces will require fine-side
     subdivision and mapping into the neighboring coarse side.
   - Cross-patch hierarchical coarse-fine coverage (outstanding_issues.txt
-    item 1 steps 6 and 7) is 11 2D two-patch layouts (normal, tangential,
-    non-dyadic, three-level, crossed, reversed; either patch refined) and
-    two 3D split-face fixtures (aligned and quarter-turn faces, each side
-    finer on some fragment). Other 3D orientation classes, junctions and
-    cycles are item 1 step 8.
+    item 1 steps 6 to 8) is 11 2D two-patch layouts (normal, tangential,
+    non-dyadic, three-level, crossed, reversed; either patch refined), two
+    3D split-face fixtures (aligned and quarter-turn faces, each side finer
+    on some fragment), every positive-orientation rigid gluing class of two
+    unit squares or cubes under one refinement pattern, degree and knot
+    layout, and five selected four-patch cycles. Interface-class coverage
+    is exhaustive; cycle coverage is fixture-based. Eight cubes around a
+    vertex are not tested.
   - A consistently parametric trace comparison (reference basis values and
     the reference normal) can bypass the Piola map in H(div) and 2D
     H(curl): strong coupling matches the interface parametrizations, so
@@ -464,8 +472,9 @@ Current position:
   - Phase 5A is complete except same-patch coarse-fine subdivision.
     Cross-patch coarse-fine fragments are enumerated (item 1, step 6) and
     their off-node physical traces agree (step 7: 11 2D layouts, two 3D
-    fixtures). Item 1 continues with step 8, the 2D/3D orientation,
-    refinement-direction, junction and cycle matrix.
+    fixtures). Step 8 adds every two-patch rigid gluing class and five
+    four-patch cycles. Item 1 then continues with step 9, the
+    discrete-complex gate.
   - The volume Piola gate is complete.
   - Phase 5B is the next implementation task.
 

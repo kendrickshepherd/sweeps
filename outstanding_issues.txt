@@ -804,6 +804,9 @@ MEDIUM PRIORITY — Architectural / Correctness
         builds; only the vector-conforming builders reject the configuration.
      b. No coercion relaxation appears to be required. Re-confirm in 3D and with
         more than two patches before closing this sub-step.
+        [CLOSED 2026-10-29, review hardenings applied 2026-10-30:
+        MEASURED on the tested fixtures, item 1 STEP 8's two-patch matrix
+        and four-patch cycles, 2D and 3D.]
      c. Relax validateMatchingInterfaces to permit asymmetric leaf selection when
         both patches share the same underlying mesh structure at all levels.
      d. Add an ALGEBRAIC test verifying: coarse merged interface DOF active,
@@ -999,7 +1002,8 @@ MEDIUM PRIORITY — Architectural / Correctness
      7. Off-node physical H1, H(div) and H(curl) trace tests.
         [DONE: STEP 7 below; 48a8047]
      8. 2D/3D orientation, refinement-direction, junction and cycle matrix.
-        [IN PROGRESS: STEP 8 below]
+        [SECOND HALF IMPLEMENTED 2026-10-29, review hardenings applied
+        2026-10-30: STEP 8 below; first half 8ac1c2e]
      9. A separate discrete-complex gate: composition to zero, plus
         rank/nullity exactness on a contractible fixture.
     10. Documentation, full suite, then automatic AMR.
@@ -1686,11 +1690,14 @@ MEDIUM PRIORITY — Architectural / Correctness
        paragraph, since the test does not measure geometric regularity.
      COMMITTED 2026-10-26 by the user as 48a8047 "Verify physical traces
        across asymmetric multipatch refinement".
-     STEP 8 (2026-10-27; first half, uncommitted).  The orientation and
-       refinement-direction matrix (test/SharedInterfaceRefinement_test.cpp,
-       two cases).  Done in two halves.  This half covers every gluing of
-       two unit cubes; it stops for vetting before the junction and cycle
-       half proposed at the end.
+     STEP 8 (2026-10-27; first half COMMITTED 2026-10-29, 8ac1c2e).  The
+       orientation and refinement-direction matrix
+       (test/SharedInterfaceRefinement_test.cpp, two cases).  Done in two
+       halves.  This half covers every admissible positive-orientation
+       rigid gluing class of two unit cubes represented here (16 in 2D, 144
+       in 3D); not every degree, knot vector, leaf pattern or geometry.  It
+       stopped for vetting before the junction and cycle half (SECOND HALF,
+       IMPLEMENTED, below).
      Layouts.  Each patch is a unit cube placed by a rotation (a signed
        permutation matrix of determinant +1) and a shift.  For each side sa,
        patch 0 takes the first rotation that turns sa's outward normal to
@@ -1716,8 +1723,11 @@ MEDIUM PRIORITY — Architectural / Correctness
        therefore comes from either patch, and each side has more than one
        fine element along the interface: 4 records in 2D, 8 in 3D.  Degree
        2, uniform open knots, 2 elements per axis at level 0.  The geometry
-       is the rigid placement itself, so the Piola maps reduce to rotations;
-       step 7 covers a curved map.
+       is step 7's curvedMap applied after the placement, through the same
+       splineGeometry; one global map, so the patches conform, and the Piola
+       maps are not rotations.  CORRECTED 2026-10-29: this said the geometry
+       was the rigid placement; splineGeometry applies curvedMap to every
+       placed Greville point.
      Checks, per space (H1, H(div), H(curl)).  Preconditions: no leaf is
        requested twice, and each requested leaf is an element of its patch.
        leafElements() equals the requested leaves as a multiset (action
@@ -1779,42 +1789,232 @@ MEDIUM PRIORITY — Architectural / Correctness
           P3; the rerun indexed by layout gives 144.
        Bounds.  Each probe shows only that its own substitution is caught
           on these fixtures.  P3 tried one wrong permutation per layout.
-     Evidence.  EXHAUSTIVELY VERIFIED over a finite family: every gluing of
-       two unit cubes by a rotation passes, i.e. every (sa, sb, P) triple
-       (16 in 2D, 144 in 3D), in all three spaces.  This holds for one
-       refinement pattern, one degree and one knot layout, under affine
-       geometry.  It says nothing about other leaf patterns, degrees,
+     Evidence.  EXHAUSTIVELY VERIFIED over a finite family: every admissible
+       positive-orientation rigid gluing class of two unit cubes represented
+       here passes, i.e. every (sa, sb, P) triple (16 in 2D, 144 in 3D), in
+       all three spaces.  This holds for one refinement pattern, one degree
+       and one knot layout, under one curved geometry (curvedMap after the
+       placement).  It says nothing about other leaf patterns, degrees,
        non-uniform knots or more than two patches.  Action (b) is MEASURED
        for two patches in 2D and 3D (160 layouts, three spaces) and stays
        open until the second half.
      Runs.  SIR 11814 assertions in 12 cases, 11.8 s for the whole binary;
        full ctest 238/238.  No added SIR line exceeds 120 columns.
-     SECOND HALF, PROPOSED (not started).  The same placed unit cubes, with
-       glue() on every pair of touching faces.  placedLayoutOutcome is
-       unchanged; it already takes N patches.  Expected pairs come from
-       every two placed leaf boxes that share a face, and diagonal
-       neighbours share none.
-         2D: four squares around a vertex (a cycle of four interfaces).
-         3D: four cubes around an edge (a cycle of four interfaces around
-           it).
-       Rotations are mixed so that the cycle has reversed interfaces, and
-       swapped ones in 3D.  Refinement is asymmetric at the junction: two
-       diagonal patches refine the elements at the shared vertex or edge,
-       and the other two do not; 3D refinement is anisotropic as above.
-       This is the case AMENDED E11 asks for, and it would close action (b)
-       for more than two patches.  splineGeometry's control-point check
-       would then also require that a function shared by all four patches
-       is merged consistently around the cycle.
-       Questions for vetting:
-         (i) Rotation coverage.  2D can take all 4^4 = 256 assignments.
-             3D cannot take all 24^4, so either all 24 rotations for one
-             patch with the rest fixed, or a set chosen so that each of the
-             four permutations appears on the cycle.
-         (ii) Whether a 3D vertex junction (eight cubes) is also wanted.
-         (iii) Whether an L-shaped three-patch corner (a boundary junction)
-             is also wanted.
-       Interior vertices of valence other than four cannot be built from
-       axis-aligned cubes, so they stay out of scope here.
+     REVIEW OF STEP 8 FIRST HALF (2026-10-29).  Approved; 11814 assertions
+       in 12 cases passed.  P1a is the strongest result: the scale-index
+       swap is caught only by the anisotropic matrix.  The coverage claim
+       is narrowed as above.  Decisions:
+         (i) Rotations.  A deliberately selected set: not all 256 in 2D,
+             and not all 24 rotations of one patch in 3D.  2D: one aligned
+             control cycle, and one mixed cycle with reversed interfaces and
+             diagonal asymmetric refinement.  3D: one aligned control cycle
+             and at least two mixed cycles that between them have all four
+             permutations; swapped and reversed interfaces; nontrivial
+             transforms on more than one edge of a cycle; swapped and
+             reversed interfaces under each direction of coarse-fine
+             ownership; and an identity composed transform around each
+             cycle.  The assignments are searched offline and hardcoded
+             with their expected interface signatures; the test does not
+             choose them.
+         (ii) Eight cubes around a vertex: deferred.  Future coverage, not
+             needed to close step 8 or action (b).
+         (iii) Three-patch L-shaped corner: deferred.  Its adjacency graph
+             is a tree, so it has no cycle.
+       Valence.  In the 2D square tiling, an interior vertex of valence
+         other than four cannot be built from axis-aligned squares, so it
+         stays out of scope.  This does not hold for 3D cube vertices,
+         where eight cubes meet; that is (ii).
+       Correction found while starting the second half: the step 8
+         geometry is curved, not rigid (see Refinement above).
+     SECOND HALF, DECIDED (2026-10-29).  The same placed unit cubes, with
+       glue() on every pair of touching faces; placedLayoutOutcome already
+       takes N patches.  2D: four squares around a vertex.  3D: four cubes
+       around an edge.  Two diagonal patches refine the elements at the
+       shared vertex or edge, and the other two do not; 3D refinement stays
+       anisotropic.  splineGeometry alone does not establish cycle
+       consistency, so each cycle also pins, independently:
+         - exactly four declared interfaces and cycle rank one;
+         - requested leaves equal effective leaves on every patch;
+         - the two coarse patches stay coarse (nothing propagates across
+           an interface);
+         - coarse-fine records only between adjacent patches, none
+           diagonal;
+         - the composed interface transform around the cycle, built from
+           the restated rule, is the identity;
+         - an H1 class spans all four patches;
+         - 3D: an H(curl) edge-direction class spans all four patches,
+           with relative signs expected from the placement and even parity;
+         - H(div) classes stay pairwise face classes, not merged around
+           the edge;
+         - physical traces agree on all four interfaces.
+       A four-patch class is expected for H1 and the edge-direction H(curl)
+       functions, not for H(div).  This is the case AMENDED E11 asks for;
+       it would close action (b) for more than two patches.
+     SECOND HALF, IMPLEMENTED (2026-10-29; review hardenings applied
+       2026-10-30, see REVIEW below).  Two cases: "Placed four-patch
+       cycles: rotations and interface signatures" and "Placed four-patch
+       cycles: junction classes, leaves, fragments and physical traces".
+     Layout.  Patch 0 at the origin, 1 shifted by e_x, 2 by e_x + e_y and
+       3 by e_y; in 3D the shared edge runs along placed z at x = y = 1.
+       glue() declares the four touching pairs 0-1, 1-2, 2-3 and 0-3.  The
+       diagonal patches 0 and 2 refine their elements at the junction
+       (both z layers in 3D); 1 and 3 stay coarse.  Level 1 bisects placed
+       x and y, so 3D refinement is anisotropic.  Degree, knots and the
+       curved geometry are the first half's.  Each interface has one (3D:
+       two) coarse pair and two (3D: four) coarse-fine records, so a cycle
+       has 12 records in 2D and 24 in 3D.
+     Fixtures, selected offline by a scratchpad search over the rule
+       restated in Python: every 2D assignment of the four rotations, and
+       the 51935 3D assignments with at most three patches rotated.  The
+       composed chart was the identity in every assignment enumerated, as
+       a rigid placement requires, so the search ranked only the other
+       conditions.  The fixtures are hardcoded with their signatures
+       (sides, P, swapped, reversed axes); the test does not choose them:
+         2D aligned              every interface Flip1d, 0 reversed.
+         2D patch 2 half turn    1-2 and 2-3 reversed; the fine side is
+                                 second on 1-2 and first on 2-3.
+         3D aligned              every interface ZeroToZero, 0 reversed.
+         3D patch 3 half turn    2-3 ZeroToTwo, 1 reversed; 0-3
+           about y               ZeroToTwo, 2 reversed; fine side first
+                                 on both.
+         3D patch 2 third turn   1-2 ZeroToOne, swapped, 1 reversed, fine
+                                 second; 2-3 ZeroToThree, swapped, 1
+                                 reversed, fine first.
+       Each mixed cycle rotates one patch and has two nontrivial
+       interfaces.  The two mixed 3D cycles together have all four
+       permutations, and swapped and reversed interfaces each with the
+       fine side first and second.  The signatures case asserts these
+       conditions as well as the signatures.  One single 3D cycle also
+       meets every condition; two were kept, as decided.
+     Pins (cyclePins).  Read from the built level-0 map, leaf cells, trace
+       records and function maps; none comes from splineGeometry:
+         - eight directed connections, on exactly the four cycle edges;
+           E - V + C = 1;
+         - the rule's chart (depth across the shared side, ruleImage on
+           the tangents), composed 0-1-2-3-0, fixes dim + 1 sample points
+           whose affine independence the test checks (|det| > 0.1); the
+           chart is affine, so it is the identity;
+         - per space, leaves per patch and level equal the requested
+           ones, so patches 1 and 3 have no level-1 leaf;
+         - records per patch pair are as above, only on cycle edges, and
+           no coarse patch is ever the fine side;
+         - no class holds two local functions of one patch, and none
+           spans two diagonal patches or three patches;
+         - H1 four-patch classes: 1 in 2D, 4 in 3D (case CHECK);
+         - H(div): no four-patch class (case CHECK), and each two-patch
+           class lies along its interface's normal;
+         - H(curl): each two-patch class is tangential to its interface;
+           2D has no four-patch class; 3D has exactly 3 (case CHECK),
+           along placed z.  Around the cycle, the rule carries each
+           edge component to the next with a sign sigma; the
+           orientations match sigma, and the parity is even;
+         - every multi-patch vector class keeps one placed axis, and two
+           entries' orientations agree exactly when their placed
+           component signs do.
+       placedLayoutOutcome then runs the first half's record, fragment and
+       fragmentTraceConformity checks on all four interfaces.  If it
+       throws, the cycle records the throw as a problem, so the pins
+       above are still reported and the later cycles still run (Q3).
+     MEASURED (P0 instrumentation, removed).  Spans count classes by the
+       number of patches.  The last two columns count above-threshold
+       observations: a shared trace above 1e-3, and a full-vector value
+       difference above 1e-6:
+                     spans 1   2   4  records  comparisons  nonzero  jumps
+         2D  H1          38  12   1       12          564      108      0
+             H(div)      80  12   -       12          852       72     72
+             H(curl)     80  12   -       12          852       72     72
+         3D  H1         152  48   4       24         3384      618      0
+             H(div)     408  36   -       24         5136      288    288
+             H(curl)    434  84   3       24         7368      864    864
+       The two 2D cycles agree in every count.  So do the three 3D
+       cycles, except that the third turn has 617 above-threshold
+       observations in H1 and 862 in H(curl).  The threshold is arbitrary
+       and the sample points are fixed, so a rotation can move a trace
+       across it; these are not invariant nonzero counts.  The two-patch
+       spans equal the level-0 face counts per interface (H1: 3 in 2D, 12
+       in 3D; H(div) 3 and 9; H(curl) 3 and 21).  The 3 four-patch H(curl)
+       classes are the edge component, of degree 1 along z.  ARGUED: every
+       level-0 interface function's support reaches a coarse patch, so it
+       stays active; a level-1 function with a nonzero interface trace
+       would need the coarse side refined, so it is not active.
+     Bypass probes, MEASURED.  Each edits one file and runs both cycle
+       cases, the first half's leaves case and step 7's 3D case.  It then
+       restores the file byte-identical (cmp) and rebuilds green (11970
+       assertions in 14 cases).  Q1 and Q2 were run before and after the
+       Q3 reporting fix, with identical results.  Q1, Q2 and Q3b predate the
+       review's hardenings; Q3c (REVIEW below) reruns Q3 after them.
+       Q1 (VectorConformingMultiPatchSplineSpace.cpp) Every patch-3
+          orientation flag in the level vector map is inverted.  All five
+          cycles fail, by the relative-sign pin (H(div): 6 classes in 2D,
+          18 in 3D; H(curl): 6 and 45), by the edge-orientation pin on the
+          two cycle steps that touch patch 3 (3 classes x 2), and by the
+          physical traces.  The parity pin is silent, as expected, since
+          the two flips cancel.  The two-patch cases have no patch 3 and
+          pass.
+       Q2 (same file) H(div) relevance becomes "on any boundary".  All
+          five cycles fail the no-four-patch H(div) CHECK and the
+          wrong-axis pin (12 classes in 2D, 68 in 3D); 2 (2D) or 10 (3D)
+          H(div) classes span four patches.  fragmentTraceConformity
+          reports nothing, and the first half's matrix and step 7's 3D case
+          pass.  On these fixtures, only the class pins catch this
+          substitution.
+       Q3 (test side) "3D aligned" declares ZeroToTwo on 0-1 instead of
+          ZeroToZero.  The signature CHECK and the composed-chart pin (at both
+          of its then two points) catch it; the span CHECKs still pass (H1 4,
+          H(curl) 3).  splineGeometry then throws "patch control points
+          disagree on a shared function".  In the first run that throw aborted
+          the case before the pins were reported, and the pin's message
+          appeared only in a probe-added stderr print.  The throw is now
+          caught per cycle.  The rerun (Q3b) reports the composed-chart pin,
+          the throw, and H(curl) pins the first run never reached: 28
+          relative-sign, 7 edge-orientation and 3 odd-parity problems.  The
+          other four cycles still run and pass.  No H1 or H(div) pin fires:
+          those check spans, axes and signs, not which positions pair, and the
+          trace checks that would compare positions do not run past the throw.
+       Bounds.  Each probe shows only that its own substitution is caught
+          on these five cycles.  No probe was run for leaves propagating
+          into a coarse patch, a diagonal record or a three-patch class:
+          the exact leaf, record and span assertions exclude each directly
+          (review, 2026-10-30).
+     Evidence.  MEASURED on five selected cycles (two 2D, three 3D), with
+       one refinement pattern, degree and knot layout, under one curved
+       geometry.  Cyclic-topology coverage stays fixture-based (section 2,
+       CORRECTED 2026-10-07); the first half's class sweep does not
+       transfer to cycles.  Action (b): leafElements equals the requested
+       leaves per patch and level in 3D and on four-patch cycles with
+       asymmetric refinement at the junction, which meets AMENDED E11's
+       condition.  Action (b) is closed for these fixtures; (ii), eight
+       cubes around a vertex, stays deferred.
+     Runs.  SIR 11970 assertions in 14 cases; the two cycle cases take
+       0.67 s.  The whole binary took 10.0 s and 16.0 s on two runs, the
+       difference almost all in the first half's matrix case (9.0 s
+       against 14.4 s), so machine variance.  Full ctest 240/240.  No added
+       SIR line exceeds 120 columns.
+     REVIEW OF STEP 8 SECOND HALF (2026-10-30).  Almost ready; two test
+       hardenings first, both applied.  The 617/862 counts are not a blocker,
+       and no further probes are needed (Bounds above).
+         (i) Composed chart.  Two fixed points do not generally prove an affine
+             map is the identity.  The chart is now checked at dim + 1 points,
+             with |det| > 0.1 on their differences.
+         (ii) One function per patch.  The patch sets and by_patch.emplace could
+             hide two local functions of one patch in one global class.  H1 and
+             both vector spaces now flag that.
+         (iii) Wording.  617 and 862 count observations above an arbitrary 1e-3
+             threshold, and are reported as such (MEASURED above).
+       Confirmation, MEASURED (run_probe as above; each restored byte-identical
+         and rebuilt green, 11970 assertions in 14 cases).
+         R2: Q3's substitution plus a second patch-3 entry injected into one
+             class of each vector space.  The chart pin fails at all four points
+             of "3D aligned".  The injection is flagged once per vector space in
+             each correctly declared cycle.
+         Q3c: Q3's substitution alone on the hardened test.  Besides Q3b's
+             findings (the chart pin now failing at all four points), 8 H1 and 3
+             H(curl) classes hold two functions of one patch; no H(div) class
+             does.  No H1 pin fired in Q3b, so the H1 classes are new
+             detections; the H(curl) ones add to pins that already fired.  On
+             this substitution, the review's concern was real.
+       Runs after the hardenings: SIR 11970 assertions in 14 cases; full ctest
+         240/240 (136 s).
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces

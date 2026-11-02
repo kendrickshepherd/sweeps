@@ -2504,3 +2504,437 @@ TEST_CASE( "Placed two-patch layouts: leaves, fragments and physical traces unde
     INFO( joined( problems ) );
     CHECK( problems.empty() );
 }
+
+// Step 8, second half: four unit cubes around a vertex (2D) or an edge (3D),
+// patch p shifted by cycleShift and glued on every touching face.  Patches 0
+// and 2 refine their elements at the junction; 1 and 3 stay coarse.  The
+// rotations and interface signatures were selected offline and are pinned.
+namespace
+{
+    const std::array<std::pair<size_t, size_t>, 4> cycle_pairs = { { { 0, 1 }, { 1, 2 }, { 2, 3 }, { 0, 3 } } };
+    const std::set<size_t> cycle_refined_patches = { 0, 2 };
+
+    Eigen::VectorXd cycleShift( const size_t dim, const size_t patch )
+    {
+        Eigen::VectorXd out = Eigen::VectorXd::Zero( dim );
+        out( 0 ) = patch == 1 or patch == 2 ? 1.0 : 0.0;
+        out( 1 ) = patch >= 2 ? 1.0 : 0.0;
+        return out;
+    }
+
+    struct CycleInterface
+    {
+        size_t pa, sa, pb, sb;
+        TPPermutation permutation;
+        bool swapped;
+        size_t reversed;
+    };
+
+    struct CycleFixture
+    {
+        std::string name;
+        std::vector<Rotation> rotations;        // by patch
+        std::vector<CycleInterface> interfaces; // in cycle_pairs order
+    };
+
+    std::vector<CycleFixture> cycleFixtures()
+    {
+        using P = TPPermutation;
+        const Rotation i2 = { { 1, 0 }, { 0, 1 } };
+        const Rotation half2 = { { -1, 0 }, { 0, -1 } };
+        const Rotation i3 = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
+        const Rotation half_y = { { -1, 0, 0 }, { 0, 1, 0 }, { 0, 0, -1 } };
+        const Rotation third = { { 0, -1, 0 }, { 0, 0, -1 }, { 1, 0, 0 } };
+        return { { "2D aligned",
+                   { i2, i2, i2, i2 },
+                   { { 0, 0, 1, 1, P::Flip1d, false, 0 },
+                     { 1, 2, 2, 3, P::Flip1d, false, 0 },
+                     { 2, 1, 3, 0, P::Flip1d, false, 0 },
+                     { 0, 2, 3, 3, P::Flip1d, false, 0 } } },
+                 { "2D patch 2 half turn",
+                   { i2, i2, half2, i2 },
+                   { { 0, 0, 1, 1, P::Flip1d, false, 0 },
+                     { 1, 2, 2, 2, P::Flip1d, false, 1 },
+                     { 2, 0, 3, 0, P::Flip1d, false, 1 },
+                     { 0, 2, 3, 3, P::Flip1d, false, 0 } } },
+                 { "3D aligned",
+                   { i3, i3, i3, i3 },
+                   { { 0, 0, 1, 1, P::ZeroToZero, false, 0 },
+                     { 1, 2, 2, 3, P::ZeroToZero, false, 0 },
+                     { 2, 1, 3, 0, P::ZeroToZero, false, 0 },
+                     { 0, 2, 3, 3, P::ZeroToZero, false, 0 } } },
+                 { "3D patch 3 half turn about y",
+                   { i3, i3, i3, half_y },
+                   { { 0, 0, 1, 1, P::ZeroToZero, false, 0 },
+                     { 1, 2, 2, 3, P::ZeroToZero, false, 0 },
+                     { 2, 1, 3, 1, P::ZeroToTwo, false, 1 },
+                     { 0, 2, 3, 3, P::ZeroToTwo, false, 2 } } },
+                 { "3D patch 2 third turn",
+                   { i3, i3, third, i3 },
+                   { { 0, 0, 1, 1, P::ZeroToZero, false, 0 },
+                     { 1, 2, 2, 4, P::ZeroToOne, true, 1 },
+                     { 2, 2, 3, 0, P::ZeroToThree, true, 1 },
+                     { 0, 2, 3, 3, P::ZeroToZero, false, 0 } } } };
+    }
+
+    // Level 1 bisects placed x and y, so a 3D interface is refined along one
+    // tangential axis.  The refined patches split every element at the
+    // junction.
+    PlacedLayout cycleLayout( const CycleFixture& fixture )
+    {
+        const size_t dim = fixture.rotations.front().size();
+        PlacedLayout layout;
+        layout.name = fixture.name;
+        for( size_t p = 0; p < 4; p++ ) layout.patches.push_back( { fixture.rotations.at( p ), cycleShift( dim, p ) } );
+        for( const CycleInterface& i : fixture.interfaces ) glue( layout, i.pa, i.sa, i.pb, i.sb );
+        layout.refined_axes = { 0, 1 };
+        for( const size_t p : cycle_refined_patches )
+            for( const size_t z : dim == 2 ? std::vector<size_t>{ 0 } : std::vector<size_t>{ 0, 1 } )
+            {
+                std::vector<size_t> element( dim, p == 0 ? 1 : 0 );
+                if( dim == 3 ) element.at( 2 ) = z;
+                layout.refined.push_back( { p, element } );
+            }
+        layout.expected_records = dim == 2 ? 12 : 24;
+        return layout;
+    }
+
+    struct CyclePins
+    {
+        std::vector<std::string> problems;
+        std::map<std::string, std::map<size_t, size_t>> spans; // space, patches spanned, classes
+    };
+
+    struct ClassEntry
+    {
+        size_t patch;
+        size_t component;
+        bool orientation;
+    };
+
+    // Patch-local entries of each global function.  Local vector functions are
+    // component-major, so the component comes from the scalar bases' sizes.
+    std::map<FunctionId, std::vector<ClassEntry>>
+        vectorClasses( const VectorConformingHierarchicalMultiPatchSplineSpace& ss )
+    {
+        std::map<FunctionId, std::vector<ClassEntry>> out;
+        for( size_t p = 0; p < ss.functionIdMap().size(); p++ )
+        {
+            const auto& bases = ss.constituents().at( p )->scalarBases();
+            size_t component = 0;
+            size_t bound = bases.at( 0 )->numFunctions();
+            for( size_t i = 0; i < ss.functionIdMap().at( p ).size(); i++ )
+            {
+                while( i >= bound ) bound += bases.at( ++component )->numFunctions();
+                const auto& [global, orientation] = ss.functionIdMap().at( p ).at( i );
+                out[global].push_back( { p, component, orientation } );
+            }
+        }
+        return out;
+    }
+
+    // Pins at the junction that do not rest on splineGeometry.
+    CyclePins cyclePins( const PlacedLayout& layout )
+    {
+        CyclePins out;
+        const size_t dim = layout.patches.front().rotation.size();
+        const std::string prefix = layout.name + ", ";
+        const std::set<std::pair<size_t, size_t>> adjacent( cycle_pairs.begin(), cycle_pairs.end() );
+        const LayoutHierarchy hierarchy = placedHierarchy( layout, placedLeaves( layout ) );
+
+        // Four declared interfaces, read back from the level-0 map; cycle rank
+        // E - V + C is one.
+        const InternalConnectionsMap& connections = levelCMap( *hierarchy.levels.front() ).connections();
+        std::set<std::pair<size_t, size_t>> glued;
+        for( const auto& [a, c] : connections )
+            glued.insert( std::minmax( a.constituent_id, c.second.constituent_id ) );
+        std::vector<size_t> label = { 0, 1, 2, 3 };
+        for( size_t pass = 0; pass < 4; pass++ )
+            for( const auto& [a, b] : glued ) label.at( a ) = label.at( b ) = std::min( label.at( a ), label.at( b ) );
+        const size_t components = std::set<size_t>( label.begin(), label.end() ).size();
+        if( connections.size() != 8 or glued != adjacent )
+            out.problems.push_back( prefix + "the declared interfaces are not the four cycle edges" );
+        if( glued.size() + components != 4 + 1 ) out.problems.push_back( prefix + "the cycle rank is not one" );
+
+        // The rule's chart from patch a into patch b's coordinates, extended
+        // across the shared side; composed around the cycle it is the identity.
+        // It is affine, so dim + 1 affinely independent fixed points suffice.
+        const auto connection = [&]( const size_t a, const size_t b ) {
+            for( const auto& [from, c] : connections )
+                if( from.constituent_id == a and c.second.constituent_id == b )
+                    return std::tuple{ from.side_id, c.second.side_id, c.first };
+            throw std::runtime_error( "patches " + std::to_string( a ) + " and " + std::to_string( b ) +
+                                      " are not glued" );
+        };
+        const auto chart = [&]( const size_t a, const size_t b, const Eigen::VectorXd& x ) {
+            const auto [sa, sb, p] = connection( a, b );
+            const double depth = sa % 2 == 1 ? x( sa / 2 ) : 1.0 - x( sa / 2 );
+            const std::vector<size_t> ta = sideAxes( dim, sa );
+            const std::vector<size_t> tb = sideAxes( dim, sb );
+            Eigen::VectorXd v( dim - 1 );
+            for( size_t d = 0; d + 1 < dim; d++ ) v( d ) = x( ta.at( d ) );
+            const Eigen::VectorXd w = ruleImage( v, sa, sb, p );
+            Eigen::VectorXd y( dim );
+            y( sb / 2 ) = sb % 2 == 1 ? -depth : 1.0 + depth;
+            for( size_t d = 0; d + 1 < dim; d++ ) y( tb.at( d ) ) = w( d );
+            return y;
+        };
+        const std::vector<Eigen::Vector3d> starts = {
+            { 0.13, 0.71, 0.37 }, { 0.92, 0.18, 0.55 }, { 0.38, 0.94, 0.81 }, { 0.71, 0.62, 0.09 } };
+        Eigen::MatrixXd spread( dim, dim );
+        for( size_t k = 0; k < dim; k++ ) spread.col( k ) = ( starts.at( k + 1 ) - starts.front() ).head( dim );
+        if( std::abs( spread.determinant() ) < 0.1 )
+            out.problems.push_back( prefix + "the chart sample points are affinely dependent" );
+        try
+        {
+            for( size_t k = 0; k <= dim; k++ )
+            {
+                const Eigen::VectorXd start = starts.at( k ).head( dim );
+                Eigen::VectorXd x = start;
+                for( size_t p = 0; p < 4; p++ ) x = chart( p, ( p + 1 ) % 4, x );
+                if( ( x - start ).norm() > geom_tol )
+                    out.problems.push_back( prefix + "the composed interface charts are not the identity" );
+            }
+        }
+        catch( const std::exception& e )
+        {
+            out.problems.push_back( prefix + e.what() );
+            return out;
+        }
+
+        const HierarchicalMultiPatchSplineSpace h1 = buildHierarchicalSplineSpace( hierarchy.levels, hierarchy.leaves );
+        const VectorConformingHierarchicalMultiPatchSplineSpace hdiv = buildHDivHierarchicalMultiPatchSplineSpace( h1 );
+        const VectorConformingHierarchicalMultiPatchSplineSpace hcurl =
+            buildHCurlHierarchicalMultiPatchSplineSpace( h1 );
+        const std::vector<std::pair<std::string, const SplineSpace*>> spaces = {
+            { "H1", &h1 }, { "H(div)", &hdiv }, { "H(curl)", &hcurl } };
+
+        // Leaves per patch and level: refined patches split their junction
+        // elements, and nothing propagates into the coarse patches.
+        std::map<std::pair<size_t, size_t>, size_t> expected_leaves;
+        for( size_t p = 0; p < 4; p++ ) expected_leaves[{ p, 0 }] = size_t( 1 ) << dim;
+        for( const auto& [p, element] : layout.refined )
+        {
+            expected_leaves[{ p, 0 }]--;
+            expected_leaves[{ p, 1 }] += size_t( 1 ) << layout.refined_axes.size();
+        }
+        // Each interface: two (3D: four) fine faces against coarse ones, and one
+        // (3D: two) coarse pair; the fine side is a refined patch.
+        std::map<std::pair<size_t, size_t>, std::pair<size_t, size_t>> expected_records;
+        for( const auto& pair : cycle_pairs ) expected_records[pair] = dim == 2 ? std::pair{ 3, 2 } : std::pair{ 6, 4 };
+
+        for( const auto& [name, ss] : spaces )
+        {
+            const std::string where = prefix + name + ": ";
+            const auto& cmap = dynamic_cast<const HierarchicalMultiPatchCombinatorialMap&>(
+                ss->basisComplex().parametricAtlas().cmap() );
+            std::map<std::pair<size_t, size_t>, size_t> leaves;
+            const std::vector<std::vector<Cell>> leaf_cells = leafElements( cmap );
+            for( size_t level = 0; level < leaf_cells.size(); level++ )
+                for( const Cell& c : leaf_cells.at( level ) )
+                    leaves[{ levelKey( *cmap.refinementLevels().at( level ), level, c ).at( 1 ), level }]++;
+            if( leaves != expected_leaves ) out.problems.push_back( where + "leaves per patch and level differ" );
+
+            std::map<std::pair<size_t, size_t>, std::pair<size_t, size_t>> records; // all, coarse-fine
+            for( const TraceMeshInterface& iface : patchTraceMeshInterfaces( *ss ) )
+            {
+                if( not iface.second.has_value() ) continue; // placedLayoutOutcome reports it
+                const TraceMeshSide& a = iface.first;
+                const TraceMeshSide& b = *iface.second;
+                auto& count = records[std::minmax( a.patch_id, b.patch_id )];
+                count.first++;
+                if( a.level == b.level ) continue;
+                count.second++;
+                if( not cycle_refined_patches.contains( ( a.level > b.level ? a : b ).patch_id ) )
+                    out.problems.push_back( where + "a coarse patch is the fine side of " + sideText( a ) + " / " +
+                                            sideText( b ) );
+            }
+            if( records != expected_records ) out.problems.push_back( where + "records per patch pair differ" );
+        }
+
+        // Classes: the patches a global function spans, with at most one local
+        // function per patch.  Two-patch classes are adjacent.  A vector class
+        // keeps one placed axis, and two entries' orientations agree exactly
+        // when their components point the same way.
+        const auto spanned = [&]( const std::string& where, const std::set<size_t>& patches ) {
+            if( patches.size() == 2 and not adjacent.contains( { *patches.begin(), *patches.rbegin() } ) )
+                out.problems.push_back( where + "a class spans diagonal patches" );
+            if( patches.size() == 3 ) out.problems.push_back( where + "a class spans three patches" );
+        };
+        std::map<FunctionId, std::set<size_t>> h1_classes;
+        for( size_t p = 0; p < h1.functionIdMap().size(); p++ )
+            for( const FunctionId& g : h1.functionIdMap().at( p ) )
+                if( not h1_classes[g].insert( p ).second )
+                    out.problems.push_back( prefix + "H1: a class holds two functions of one patch" );
+        for( const auto& [g, patches] : h1_classes )
+        {
+            out.spans["H1"][patches.size()]++;
+            spanned( prefix + "H1: ", patches );
+        }
+
+        using VectorSpace = std::pair<std::string, const VectorConformingHierarchicalMultiPatchSplineSpace*>;
+        for( const auto& [name, ss] : { VectorSpace{ "H(div)", &hdiv }, VectorSpace{ "H(curl)", &hcurl } } )
+        {
+            const std::string where = prefix + name + ": ";
+            const bool div = name == "H(div)";
+            for( const auto& [g, entries] : vectorClasses( *ss ) )
+            {
+                std::set<size_t> patches;
+                for( const ClassEntry& e : entries ) patches.insert( e.patch );
+                if( patches.size() != entries.size() )
+                    out.problems.push_back( where + "a class holds two functions of one patch" );
+                out.spans[name][patches.size()]++;
+                spanned( where, patches );
+                if( patches.size() < 2 ) continue;
+
+                const auto axis = [&]( const ClassEntry& e ) {
+                    return placedAxis( layout.patches.at( e.patch ).rotation, e.component );
+                };
+                for( const ClassEntry& e : entries )
+                {
+                    if( axis( e ).first != axis( entries.front() ).first )
+                        out.problems.push_back( where + "a class mixes placed axes" );
+                    if( ( e.orientation == entries.front().orientation ) !=
+                        ( axis( e ).second == axis( entries.front() ).second ) )
+                        out.problems.push_back( where + "a relative sign differs from the placement" );
+                }
+                // The placed axis along which the patches' shifts differ.
+                const auto normal = [&]( const size_t a, const size_t b ) {
+                    const Eigen::VectorXd d = layout.patches.at( b ).shift - layout.patches.at( a ).shift;
+                    Eigen::Index g = 0;
+                    d.cwiseAbs().maxCoeff( &g );
+                    return size_t( g );
+                };
+                if( patches.size() == 2 )
+                {
+                    const size_t n = normal( *patches.begin(), *patches.rbegin() );
+                    if( ( axis( entries.front() ).first == n ) != div )
+                        out.problems.push_back( where + "a two-patch class has the wrong placed axis" );
+                    continue;
+                }
+                if( div or dim == 2 )
+                {
+                    out.problems.push_back( where + "a class spans four patches" );
+                    continue;
+                }
+                if( axis( entries.front() ).first != 2 )
+                    out.problems.push_back( where + "a four-patch class is not along the edge" );
+
+                // Around the cycle: the rule carries each patch's edge component
+                // to the next one's, with sign sigma; the signs have even parity
+                // and match the orientations.
+                std::map<size_t, ClassEntry> by_patch;
+                for( const ClassEntry& e : entries ) by_patch.emplace( e.patch, e );
+                int parity = 1;
+                for( size_t p = 0; p < 4; p++ )
+                {
+                    const ClassEntry& ea = by_patch.at( p );
+                    const ClassEntry& eb = by_patch.at( ( p + 1 ) % 4 );
+                    const auto [sa, sb, perm] = connection( p, ( p + 1 ) % 4 );
+                    const std::vector<size_t> ta = sideAxes( dim, sa );
+                    const std::vector<size_t> tb = sideAxes( dim, sb );
+                    const auto i = std::find( ta.begin(), ta.end(), ea.component ) - ta.begin();
+                    if( i == static_cast<std::ptrdiff_t>( ta.size() ) )
+                    {
+                        out.problems.push_back( where + "an edge component is normal to its side" );
+                        continue;
+                    }
+                    Eigen::VectorXd v = Eigen::Vector2d( 0.3, 0.4 );
+                    const Eigen::VectorXd w0 = ruleImage( v, sa, sb, perm );
+                    v( i ) += 0.25;
+                    const Eigen::VectorXd dw = ruleImage( v, sa, sb, perm ) - w0;
+                    Eigen::Index j = 0;
+                    dw.cwiseAbs().maxCoeff( &j );
+                    const int sigma = dw( j ) > 0 ? 1 : -1;
+                    parity *= sigma;
+                    if( tb.at( j ) != eb.component )
+                        out.problems.push_back( where + "the rule does not carry the edge component across" );
+                    if( ( ea.orientation == eb.orientation ) != ( sigma == 1 ) )
+                        out.problems.push_back( where + "an orientation differs from the rule's sign" );
+                }
+                if( parity != 1 ) out.problems.push_back( where + "the edge signs have odd parity" );
+            }
+        }
+        return out;
+    }
+}
+
+TEST_CASE( "Placed four-patch cycles: rotations and interface signatures", "[shared_interface_refinement]" )
+{
+    std::set<TPPermutation> permutations;
+    std::set<std::pair<std::string, bool>> owned; // swapped or reversed, refined patch first
+    for( const CycleFixture& fixture : cycleFixtures() )
+    {
+        INFO( fixture.name );
+        const PlacedLayout layout = cycleLayout( fixture );
+        CHECK( layout.connections.size() == 8 );
+        size_t nontrivial = 0;
+        for( const CycleInterface& i : fixture.interfaces )
+        {
+            const auto& [p, b] = layout.connections.at( ConstituentSide{ i.pa, i.sa } );
+            CHECK( b.constituent_id == i.pb );
+            CHECK( b.side_id == i.sb );
+            CHECK( p == i.permutation );
+            CHECK( sideClass( layout.patches.at( i.pa ), i.sa, layout.patches.at( i.pb ), i.sb ) ==
+                   std::pair{ i.swapped, i.reversed } );
+            if( i.swapped or i.reversed > 0 ) nontrivial++;
+            if( fixture.name.starts_with( "3D" ) and not fixture.name.ends_with( "aligned" ) )
+            {
+                permutations.insert( i.permutation );
+                const bool first = cycle_refined_patches.contains( i.pa );
+                if( i.swapped ) owned.insert( { "swapped", first } );
+                if( i.reversed > 0 ) owned.insert( { "reversed", first } );
+            }
+        }
+        CHECK( nontrivial == ( fixture.name.ends_with( "aligned" ) ? 0 : 2 ) );
+    }
+    // Across the mixed 3D cycles: every permutation, and swapped and reversed
+    // interfaces under each direction of coarse-fine ownership.
+    CHECK( permutations.size() == 4 );
+    const std::set<std::pair<std::string, bool>> both = {
+        { "reversed", false }, { "reversed", true }, { "swapped", false }, { "swapped", true } };
+    CHECK( owned == both );
+}
+
+TEST_CASE( "Placed four-patch cycles: junction classes, leaves, fragments and physical traces",
+           "[shared_interface_refinement]" )
+{
+    std::vector<std::string> problems;
+    for( const CycleFixture& fixture : cycleFixtures() )
+    {
+        INFO( fixture.name );
+        const bool three_d = fixture.rotations.front().size() == 3;
+        const PlacedLayout layout = cycleLayout( fixture );
+        const CyclePins pins = cyclePins( layout );
+        problems.insert( problems.end(), pins.problems.begin(), pins.problems.end() );
+        if( pins.spans.size() != 3 ) continue;
+        CHECK( pins.spans.at( "H1" ).at( 4 ) == ( three_d ? 4 : 1 ) );
+        CHECK( not pins.spans.at( "H(div)" ).contains( 4 ) );
+        CHECK( pins.spans.at( "H(curl)" ).contains( 4 ) == three_d );
+        if( three_d ) CHECK( pins.spans.at( "H(curl)" ).at( 4 ) == 3 );
+
+        // A throw from the geometry must not hide the pins above.
+        PlacedOutcome o;
+        try
+        {
+            o = placedLayoutOutcome( layout );
+        }
+        catch( const std::exception& e )
+        {
+            problems.push_back( fixture.name + ", placedLayoutOutcome threw: " + e.what() );
+            continue;
+        }
+        CHECK( o.expected_records == layout.expected_records );
+        problems.insert( problems.end(), o.problems.begin(), o.problems.end() );
+        for( const auto& [name, t] : o.traces )
+        {
+            INFO( name );
+            CHECK( t.records == layout.expected_records );
+            CHECK( t.nonzero_shared_trace_observations > 0 );
+            if( name != "H1" ) CHECK( t.full_vector_jump_observations > 0 );
+            problems.insert( problems.end(), t.problems.begin(), t.problems.end() );
+        }
+    }
+    INFO( joined( problems ) );
+    CHECK( problems.empty() );
+}
