@@ -1006,11 +1006,13 @@ MEDIUM PRIORITY — Architectural / Correctness
         [DONE: STEP 8 below; 8ac1c2e and cb32164]
      9. A separate discrete-complex gate: composition to zero, plus
         rank/nullity exactness on a contractible fixture.
-        [IMPLEMENTED 2026-11-04 with per-degree Betti numbers and a
-        published non-exact fixture; reviewed and corrected the same
-        day, awaiting commit: STEP 9 below]
+        [DONE with per-degree Betti numbers and a published non-exact
+        fixture: STEP 9 below; 0d5f11e]
     10. Documentation, full suite, then automatic AMR, with refinement
         admissibility as an explicit policy input (STEP 9 DECISION).
+        [IN PROGRESS: docs and suite done; plan vetted 2026-11-05 (the
+        loop stays in StokesFlow, an opt-in n-form check here); next 10.4;
+        STEP 10 below]
    STEP 2 RESULT (2026-10-20).  Which exception each current rejection
    reaches, MEASURED by mutation probe: each of validateMatchingInterfaces'
    two throws in turn was changed to std::runtime_error, the three binaries
@@ -2022,8 +2024,8 @@ MEDIUM PRIORITY — Architectural / Correctness
      COMMITTED 2026-11-02 by the user as cb32164 "Verify asymmetric
        refinement around multipatch cycles".
      STEP 9 (first half 2026-11-02; completed 2026-11-04 and corrected
-       after review the same day, with Q5's fix; IMPLEMENTED, awaiting
-       commit).  The discrete-complex gate
+       after review the same day, with Q5's fix; COMMITTED 0d5f11e).  The
+       discrete-complex gate
        (test/SharedInterfaceRefinement_test.cpp, seven cases).  E9 as
        AMENDED: steps 4-8 show conforming traces, and exactness does not
        follow from them.  This gate measures, per fixture, the inclusions
@@ -2383,6 +2385,397 @@ MEDIUM PRIORITY — Architectural / Correctness
            yes, in this commit, and infinities too; a certification gate
            must not silently discard invalid arithmetic (Nonfinite values
            above, case 7).
+     COMMITTED 2026-11-04 by the user as 0d5f11e "test: certify
+       hierarchical de Rham exactness by degree".
+     STEP 10, FIRST HALF (2026-11-04; plan rewritten 2026-11-05 after
+       three outside reviews and the user's answers): documentation, full suite,
+       and the AMR plan.  No production code changed; no AMR code written.
+       VETTED DECISIONS below replace the 2026-11-04 contract drafts.
+     Done.
+       Docs.  docs/hierarchical_multipatch_conforming_splines.qmd brought
+         to step 9: asymmetric leaves over compatible level
+         parameterizations; THB activity by support containment
+         (levelActiveFunctions); the three interface checks that replaced
+         the leaf-equality validator; coarse-fine fragments with side
+         embeddings; issue 15 as the limit for incompatible interfaces;
+         exactness as a separate property, measured by the test-side gate
+         and not guaranteed; admissibility as a separate check, not
+         enforced.  Revised 2026-11-05 for D1 and D6.  quarto renders it
+         with no warning (a copy, in the scratchpad; the ignored
+         docs/*.html was not touched).
+       Suite on 0d5f11e.  Full build, no warnings.  SIR 11994 assertions
+         in 21 cases; full ctest 247/247 (125 s).
+       Branch, CORRECTED 2026-11-05.  The 2026-11-04 entry ("master =
+         origin/master = 879119f") read stale local tracking refs.  On
+         GitHub, origin/master is 4351a03 (Raminpahnabi, 2026-10-07, "AMR
+         multi-level refinement", parent 879119f): one commit not in
+         piola_dev.  It adds 48 lines to src/api/SplinesAPI.cpp and
+         nothing else: the two queries of 10.4.  piola_dev has not changed
+         that file since 879119f, so a merge should be clean (ARGUED;
+         nothing fetched or merged here).
+     State, ARGUED-FROM-CODE.  CORRECTED 2026-11-05: the 2026-11-04 entry
+       said no estimator, marking or closure existed in the tracked
+       scripts.  It missed StokesFlow.
+       - StokesFlow is a separate repository (Raminpahnabi/StokesFlow, main
+         at 5262dab), checked out at StokesFlow/ and ignored here
+         (.gitignore).  It owns the adaptive loop, all of it 2D and single
+         patch:
+           estimator  Required/ResidualBasedEstimator.py: eta_K^2 =
+                      h_K^2 ||R_M||^2 + ||R_C||^2, plus traction jumps,
+                      by default for degree < 3;
+           marking    Required/RefinementUtilities.py,
+                      mark_largest_residual_leaf_elements: fixed fraction
+                      or Dorfler, returning {level: [[i, j]]};
+           grading    one level, by edge adjacency (share_edge), on by
+                      default (RESIDUAL_ENFORCE_LEVEL_GRADING); leaves
+                      meeting only at a corner may differ by two levels;
+           closure    close_multilevel_residual_cells: with
+                      RESIDUAL_ENFORCE_L2_SUPPORT_NEIGHBORHOOD (default)
+                      it adds the supports of all active L2 functions
+                      through each seed, like candidate (c) below, with a
+                      greedy fallback like (b), a frontier search, and a
+                      cluster-size cap that skips the cycle on failure;
+           loop       Problem_Setup.py: each cycle rebuilds
+                      NavierStokesHierarchicalDiscretization from its
+                      refinement history.
+       - Its multilevel marking and closure call activeLeafElementInfo and
+         l2LevelSupports, which exist only in 4351a03, and raise
+         RuntimeError without them.  hierarchicalRefinementDiagnostics,
+         which supplies the active L2 ids, is on piola_dev.
+       - 4351a03 predates STEP 5 FIX (c8a5cad, 2026-10-20), so the closure
+         was developed against the former face-neighbour activity.  Under
+         the fix, active sets are subsets of the former ones and differ
+         only near leaf-level jumps of two or more (STEP 5 FIX).  Edge
+         grading excludes such jumps across an edge, not at a corner.
+       - The closure's stated acceptance test (its docstring: a trial must
+         deactivate at least one active level-l L2 function and activate
+         at least one level-(l+1) one) is weaker than P_n.  Nothing checks
+         P_n on its output.
+       - The only refinement driver in Sweeps is single-patch and 2D:
+         NavierStokesHierarchicalDiscretization takes elems_to_refine, per
+         level a list of (i, j) element indices.  leafElements in
+         src/api/NavierStokesDiscretization.cpp replaces each by its
+         children, throwing if it is not a leaf, and each entry adds a
+         level by dyadicRefine of both knot vectors.  Marks come from the
+         caller (StokesFlow).
+       - No multipatch Navier-Stokes wrapper and no binding of a
+         hierarchical multipatch space exist in src/api.  Issue 11 names
+         NavierStokesMultiPatchDiscretization and
+         NavierStokesHierarchicalMultiPatchDiscretization; neither is in
+         src.
+       - A multipatch hierarchy is one MultiPatchSplineSpace per level
+         plus one leaf set.  buildH1MultiPatchSplineSpace glues by sides
+         (InternalConnectionsMap), which name no resolution, so the same
+         gluing serves every uniformly refined level.  The H(div), H(curl)
+         and L2 hierarchies are built from the H1 one, so the whole
+         complex shares one leaf set.  L2 is discontinuous across patches.
+       - Every level space is a full tensor product on every patch,
+         whatever the leaves, so each added level costs about 2^n times
+         the previous one on every patch.
+     Sources.  Read from the arXiv sources already downloaded for step 9
+       (untrusted, read only), not from memory; PUBLISHED below means
+       what those sources state.
+       Shepherd-Toshniwal (2209.01504).  One tensor-product domain, any
+         dimension n, homogeneous boundary conditions throughout (Sec. 2:
+         j-forms with vanishing trace for j < n; n-forms free).  Sec. 3.1
+         builds the zero traces into the basis: end knots of multiplicity
+         p, so the 0-form B-splines are the open-knot basis without its
+         first and last function in each direction.  Assumption 1: nested
+         knot vectors.  Assumption 2: Omega^{l+1} is a union of supports
+         of level-l 0-form B-splines (of that zero-trace basis).
+         Assumption 3: any two level-l 0-form B-splines supported in
+         Omega^{l+1} that share an (n-1, l+1)-intersection are joined by
+         a shortest chain (Defs. of chain and shortest chain: steps of +1
+         in one tensor index at a time), every member supported in
+         Omega^{l+1}.  Theorem (Sec. 4.2): under Assumption 3,
+         0 -> V^0 -> ... -> V^n -> R -> 0 is exact at every level.
+         Sec. 5.1 gives a local check of Assumption 3 between successive
+         levels; no closure is given.
+       Evans et al.  The exactness results are 2D only ("From now on, we
+         will restrict ourselves to the two-dimensional case"), one
+         tensor-product domain, homogeneous boundary conditions; a remark
+         says, without proof, that they carry over without them.
+         Assumption 1: Omega^{l+1} is a union of supports of level-l
+         n-form B-splines.  Assumption 2: for every level-l k-form
+         B-spline, supp \ closure(Omega^{l+1}) is connected and simply
+         connected.  Stokes inf-sup tests (2D, p = 3, one patch,
+         numerical): of four two-level meshes, the one that fails
+         Assumption 1 ("Bulge") is exact yet unstable (0.048 to 0.011 as
+         h shrinks), which the authors take to suggest Assumption 1 is
+         necessary; "2 x 2 overlap" is inexact yet stable; "1 x 1
+         overlap" meets Assumption 1, is exact, is stable on two levels,
+         and loses stability as levels are added (0.410 to 0.145 over six
+         levels), which they attribute to adjacent non-consecutive levels
+         and avoid by grading.  Their stability argument for tensor-product
+         splines takes V_h in (H^1)^n.
+     DEFINITIONS (reference).
+       Domains.  For a leaf set, Omega^0 is the domain and Omega^{l+1}
+         the union of the level-l cells that are refined.  Leaves and
+         domains determine each other; Omega^{l+1} is a union of level-l
+         cells and lies in Omega^l.
+       Marks.  A mark is a leaf cell, of any level and patch.  Refining
+         it puts it in Omega^{l+1}; a mark on the finest level adds a
+         level.
+       Policy.  Here, a predicate P(leaf set) at every level, checked by
+         Sweeps.  The closure C(leaf set, marks) is the caller's
+         (StokesFlow, D1).  A closure should meet:
+         r1  P holds on the output whenever the input satisfies P;
+         r2  with no marks, an input satisfying P is returned unchanged;
+         r3  the output depends on the marks and the cells only, never on
+             patch numbering, dart ids or side orientation.
+         Sweeps can check r1 from outside, by validating every output.
+     OBSERVATIONS, ARGUED.  Reference for closures (the caller's) and for
+       EM and MHD later (O4, O5); the validator relies on none of them.
+       O1  P_k: for every l, Omega^{l+1} is a union of supports of level-l
+           k-form functions (k = 0 is ST Assumption 2 over the chosen
+           0-form family, k = n is Evans et al. Assumption 1).  Neither
+           family is closed under intersection (1D, degree 1: the hat
+           supports {2,3} and {3,4} meet in {3}, a union of none).  So a
+           target domain has no least P_k superset in general, and no map
+           of target domains that is extensive, monotone and idempotent
+           has exactly the P_k domains as its fixed points: the fixed
+           points of such a map are closed under intersection.
+       O2  Coarser cascade.  A level-l support through a cell of Omega^l
+           can leave Omega^l, so a closure that may use any support can
+           force Omega^l to grow, and so on down to level 1.  Supports of
+           ACTIVE level-l functions lie in Omega^l (THB activity), so a
+           closure that uses only those never cascades.
+       O3  Reach across patches.  Level-l 0-form supports of the glued
+           space cross interfaces and junctions; the L2 space is
+           discontinuous across patches, so its supports stay in one
+           patch.  A 0-form closure can refine a neighbouring patch; an
+           n-form closure cannot.  That is the AMR POLICY rule above (an
+           explicit refinement-class rule), not an interface rule.
+       O4  P_0 implies P_n over the full bases, at maximal smoothness with
+           simple knots, if our L2 level basis is the degree-(p-1)
+           B-spline basis on the same breakpoints: in 1D a degree-p
+           support is the union of the two degree-(p-1) supports inside
+           it, the first and last included, and tensor products of unions
+           are unions.  The zero-trace 0-form supports are among the full
+           ones, so ST's Assumption 2 implies P_n too.  Repeated knots are
+           not covered.
+       O5  The 0-form family depends on the boundary conditions.  The
+           single corner cell is the support of a full-basis 0-form
+           function but of no zero-trace one, so P_0 over our full level
+           bases admits domains that ST's Assumption 2 excludes.  So
+           boundary conditions enter a zero-form predicate; P_n needs
+           none, since n-forms carry no trace condition.
+       O6  Cost of a canonical closure at an interior cell, simple knots,
+           degree p in each of n directions: refining every support
+           through the cell refines (2p+1)^n cells for k = 0 and (2p-1)^n
+           for k = n; one support alone is (p+1)^n and p^n.
+       O7  Coverage.  If the input satisfies P_k, every level-l leaf lies
+           in the support of an active level-l k-form function: each
+           level-(l-1) support in Omega^l is the union of the supports of
+           the level-l functions in its refinement, which lie in Omega^l,
+           and a leaf is not in Omega^{l+1}.
+     CLOSURE CANDIDATES (reference; closures are StokesFlow's, Q3).
+       (a) Target closure: at each level, a target cell inside no support
+           that lies in the target is uncovered; add every support through
+           an uncovered cell, finest level first, cascading (O2).  Meets
+           r1-r3 on any input, so it can also repair an input that fails
+           P_k.  Not monotone (degree 1: marking 3 refines {2,3,4},
+           marking 3 and 4 refines {3,4}); cascades; costs O6.
+       (b) One support per uncovered cell, the smallest, with a tie rule.
+           Less refinement, but any tie rule on indices or positions
+           breaks r3 under some numbering or orientation; not monotone.
+       (c) Active-function closure: for each marked level-l leaf, refine
+           the supports of ALL active level-l k-form functions whose
+           support contains it, all relative to the input.  Needs P_k on
+           the input (then O7 says each mark is covered; otherwise it
+           throws).  Meets r1-r3, is monotone in the marks, never cascades
+           (O2), costs O6 at interior cells and less near the edge of
+           Omega^l.  P_k holds inductively when every refinement since the
+           unrefined hierarchy used the same policy.
+       StokesFlow's default path resembles (c) for k = n, and its fallback
+         resembles (b) with a tie rule on sorted (row, col); it does not
+         check P_n on its input (ARGUED-FROM-CODE, at 5262dab).
+     SUPERSEDED 2026-11-05: the 2026-11-04 POLICY CONTRACT DRAFTS
+       (IDENTITY, FLUIDS, EM, MHD, GRADING, Provenance) and sub-sequence
+       10.4-10.10, which put closures, an estimator and the loop in Sweeps.
+       Carried over: IDENTITY and Provenance into D2; the FLUIDS predicate
+       into D3, without its sought guarantee.  EM and MHD now throw (D5);
+       grading stays outside (D1).
+     VETTED DECISIONS (2026-11-05, the user, with the second and third
+       reviews).
+       D1  Ownership.  StokesFlow estimates, marks, grades, closes and runs
+           the loop.  Sweeps builds the hierarchy, applies patch-qualified
+           leaf refinements, and validates NFormSupportPolicy
+           independently.  Grading remains separate in StokesFlow.
+           Multipatch grading, including edge-versus-corner adjacency, is
+           deferred.
+       D2  Construction stays policy-free (IDENTITY): the constructors
+           accept any nested leaf set their validators accept, as now.
+           The n-form predicate is a separate, explicit, opt-in check,
+           never run inside construction.  A hierarchy may record the
+           policy that made it; validity comes from the check, never from
+           the record (STEP 9 DECISION).
+       D3  NFormSupportPolicy.  Predicate P_n per patch: for every patch
+           and every level l, the part of Omega^{l+1} in that patch is a
+           union of supports of level-l L2 functions of that patch, over
+           the full level basis.  L2 supports stay in one patch (O3), so
+           P_n per patch is P_n of the whole hierarchy.  No boundary
+           condition input: n-forms carry no trace condition (O5).
+           NFormSupportPolicy is the per-patch multipatch analogue of
+           Evans et al.'s Assumption 1; no multipatch theorem, exactness
+           guarantee, commuting projection, or inf-sup guarantee is
+           claimed.  The only evidence is PUBLISHED numerical (Sources:
+           one patch, 2D, p = 3), where the one multilevel loss (1 x 1
+           overlap) was avoided by grading, which stays in StokesFlow.
+       D4  StokesFlow's closure.  The current StokesFlow algorithm appears
+           designed to produce P_n-admissible output; this must be
+           verified by the independent Sweeps validator once the required
+           APIs are available.  It is not certified (State).  No count of
+           elements a closure adds for L2 support is a criterion, at zero
+           or any value (WITHDRAWN: a zero count was proposed on 2026-11-05
+           in feedback on the first review); P_n is evaluated directly
+           over the final hierarchy.
+       D5  Unsupported policies throw.  Requests for a zero-form (ST
+           Assumptions 2 and 3) or EM policy throw a not-supported error,
+           with no partial check; that policy will be designed when EM
+           development begins.  MHD throws until the EM policy exists,
+           after which it composes and checks both policies.  No request
+           falls back silently to a weaker policy.
+       D6  Interfaces.  Every background refinement level has compatible
+           interface parameterizations.  Active leaves are selected
+           independently by patch and may be coarse on one side and fine
+           on the other.  Compatible: at each level, the two sides of each
+           interface have the same element decomposition and knots along
+           the shared side, under the side permutation.  Kept when level 0
+           is compatible and each level is the uniform dyadic refinement
+           of the one below on every patch (ARGUED); checked at every
+           level by the interface checks, which throw otherwise.  A patch
+           dyadically finer than its neighbour is represented by leaves
+           from level 1 on (ARGUED, untested).  Incompatible interfaces:
+           issue 15 (dart-pair gluings) and issue 10 (nonmatching).
+       D7  Refinement only.  Coarsening is deferred; dynamic solves will
+           need it, and current solves are static.
+     QUESTIONS, RESOLVED 2026-11-05.
+       Q1. Approve the sub-sequence and its scope (no coarsening, matched
+           level meshes only)?  RESOLVED (the user): refinement only (D7).
+           "Matched level meshes" was unclear: one-sided refinement is
+           supported and is item 1's purpose; what is required is D6.
+       Q2. Marks are leaf cells?  RESOLVED (the user): yes, leaf cells
+           (elements), turned into function supports separately, in
+           StokesFlow.
+       Q3. Which closure?  RESOLVED (the user): StokesFlow's.  Sweeps
+           implements only the n-form check, with errors for every other
+           policy (D3, D5).
+       Q4. FLUIDS predicate and guarantee?  RESOLVED (the user): named
+           NFormSupportPolicy; inf-sup stability is not known (numerical
+           tests only) and there are no commuting projections yet (D3).
+       Q5. EM: which assumptions and degrees?  RESOLVED (the user): throw;
+           it promises nothing yet, and the policy is designed when EM
+           development begins (D5).
+       Q6. MHD composite?  RESOLVED (the user): compose and check both,
+           once the EM policy exists (D5).
+       Q7. GRADING for FLUIDS?  RESOLVED (the user): grading is not
+           admissibility and stays separate from NFormSupportPolicy, in
+           StokesFlow's Python for now (D1).
+       Q8. Where the loop lives?  RESOLVED (the user, after the StokesFlow
+           inventory in State): in StokesFlow, in Python; Sweeps supplies
+           construction, queries and the validator through bindings.
+       Q9. Which estimator?  RESOLVED (the user): StokesFlow's residual
+           estimator, in that repository; none here.
+       Q10. Boundary conditions in the policy input?  RESOLVED (second
+           review, adopted by the user): not for NFormSupportPolicy (D3);
+           a zero-form predicate needs them (O5); it is designed when EM
+           development begins (D5).
+       Q11. Where the queries and the validator live, and how they are
+           tested?  RESOLVED (the user, with the third review): as typed
+           native C++ functions in the basis and topology layers, tested
+           with Catch2.  SplinesAPI.cpp only marshals: typed results into
+           Python objects, Python inputs into typed ones, C++ exceptions
+           into Python ones; no support, hierarchy or policy logic of its
+           own.  Registered Python smoke tests for binding availability,
+           data shape and exception translation; never Python-only
+           testing.  Sweeps depends neither on StokesFlow nor on its
+           location, and its tests never import StokesFlow; the 10.8 test
+           depends on a built or installed Sweeps module.
+       Constraints found in code for 10.4-10.6, ARGUED-FROM-CODE.
+         - StokesFlow joins leaves on info["dart"] and reads "level" and
+           "indices".  The leaf record carries the leaf's identity, and
+           those Python keys stay, with "patch" added.  Indices are
+           level-local, and patch-local on a multipatch hierarchy.
+         - Support records name their function-ID space, the one the
+           active ids use (hierarchicalRefinementDiagnostics).
+         - src/api is compiled only into the pybind modules, so Catch2
+           cannot reach code placed there.
+         - Smoke tests that pass control points need numpy in the Python
+           CMake found; without it they report not run
+           (SKIP_RETURN_CODE), never passed.
+       Open for 10.6: whether a P_n failure is a typed result or an
+         exception, and which Python exception an unsupported policy
+         raises (pybind11 maps std::runtime_error to RuntimeError;
+         NotImplementedError needs a registered translator).
+     SUB-SEQUENCE, revised 2026-11-05.  Each item a separate commit and a
+       half-way stop, as before.
+       10.1  Documentation.  [DONE; revised 2026-11-05]
+       10.2  Full suite.  [DONE]
+       10.3  Vet the plan.  [DONE 2026-11-05: VETTED DECISIONS]
+       10.4  The two single-patch queries, activeLeafElementInfo and
+             l2LevelSupports, on piola_dev: ported from 4351a03 (the user
+             merges origin/master) or reimplemented, and either way
+             checked against STEP 5 FIX, not taken unquestioned.  Review
+             of the 48 lines: both are 2D and single-patch;
+             l2LevelSupports returns the supports of every function of the
+             level space, and StokesFlow keeps the active ones by the ids
+             from hierarchicalRefinementDiagnostics.  Tests, each with its
+             own oracle built by the test:
+               (i)   leaf indices are the level-local tensor element
+                     indices, whichever dart represents the cell (oracle:
+                     leaves from the marks);
+               (ii)  l2LevelSupports agrees with supports computed from
+                     the level knot vectors at degree p - 1;
+               (iii) the active L2 supports follow support containment on
+                     the single-patch F2 layout (jump two) and on a
+                     corner-jump layout that edge grading admits.
+             A bypass probe for each of (i)-(iii), named when written;
+             restored byte-identical.  Where the code and tests live: Q11.
+       10.5  Policy-free multipatch layer: a C++ hierarchical multipatch
+             Navier-Stokes wrapper beside
+             NavierStokesHierarchicalDiscretization (H1, H(div) and L2
+             hierarchies from patch geometries, a side gluing and a
+             refinement history), with bindings: refinement history
+             patch-qualified; leaves as (patch, level, cell) with
+             level-local indices; active ids and L2 level supports per
+             patch.  New levels refine every patch uniformly (D6); the
+             interface checks still run; no policy (D2).  Oracle: a
+             per-cell level map built from the marks by the test, never
+             from leafElements; on one patch, 10.4's queries agree, as a
+             cross-check only.  2D first, as StokesFlow is.
+       10.6  NFormSupportPolicy validator, opt-in (D2, D3): C++ with a
+             binding, over the whole hierarchy, patch by patch; it reports
+             the first failure by (patch, level, cell) and throws for
+             every unsupported policy (D5).  Tests: an independent oracle
+             (supports from the level knot vectors by the test; every cell
+             of Omega^{l+1} in a level-l support inside Omega^{l+1});
+             passing and failing fixtures named by layout; the same
+             verdict under renumbered and reoriented gluings; step 9's
+             gate on the fixtures as measurement only.  Bypass probe: the
+             check replaced by IDENTITY's (accept all) must fail a named
+             failing fixture; restored byte-identical.
+       10.7  Profiling at depth: levelActiveFunctions (COST, STEP 5 FIX),
+             level construction and the validator on a deep single-patch
+             hierarchy (StokesFlow allows level 7) and a multipatch one;
+             decide whether any needs work before the loop relies on it.
+       10.8  StokesFlow-side integration test, in that repository and
+             committed there: estimate, mark, grade, close, construct in
+             Sweeps, validate P_n, every cycle.  Single patch first;
+             multipatch with synthetic marks until a multipatch Stokes
+             solver exists.  Recorded here as MEASURED with the StokesFlow
+             commit.  It takes the Sweeps module path from its test
+             environment.  First, in StokesFlow: 16 of its files, among
+             them Required/CommonFuncs.py and Required/Solver_StokesFlow.py,
+             set SWEEPS_API_PATH on import to a path on another machine,
+             overriding any value supplied (at 5262dab).
+       10.9  Documentation and ledger.
+       Deferred: multipatch grading, including edge-versus-corner
+         adjacency (D1), for which Sweeps could expose cross-interface
+         neighbour queries while StokesFlow keeps grading; EM and MHD
+         (D5); multipatch Stokes interface terms (Phase 6), with an
+         estimator jump term at patch interfaces; coarsening (D7);
+         incompatible interfaces (D6).
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces

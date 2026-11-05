@@ -27,6 +27,9 @@ for that framework. The emphasis has been on exact operations first:
 - multipatch de Rham factories for $H^1$, $H(\mathrm{div})$,
   $H(\mathrm{curl})$, and $L^2$ spaces,
 - hierarchical multipatch conforming vector spaces,
+- asymmetric hierarchical refinement across patch interfaces, where one patch
+  may be refined while its neighbour stays coarse,
+- coarse-fine interface trace records with explicit side embeddings,
 - discontinuous hierarchical $L^2$ spaces built from the $H(\mathrm{div})$
   complex,
 - physical ($H^1$, $H(\mathrm{curl})$, $H(\mathrm{div})$, $L^2$) basis
@@ -52,13 +55,16 @@ system with the following properties:
 3. Vector-conforming spaces are built from scalar tensor-product spaces through
    the de Rham pattern rather than through special-purpose element code.
 4. Hierarchical spaces are assembled by selecting active functions level by
-   level, while pruning coarse functions whose support has been replaced by
-   refined leaf elements.
+   level: a level-$l$ function is active when its support lies in the level-$l$
+   domain and not in the level-$(l+1)$ domain.
 5. Trace information is exposed algebraically first, independent of geometry,
    normals, Piola maps, or PDE-specific interface terms.
-6. Strong multipatch conformity is supported only when the two sides of an
-   interface have matching leaf-element structure. Nonmatching interfaces are
-   rejected explicitly until a weak/nonmatching coupling layer is added.
+6. Strong multipatch conformity requires every background refinement level to
+   have compatible interface parameterizations: along each interface, the two
+   sides have the same element decomposition and knots at that level. Active
+   leaves are selected independently by patch and may be coarse on one side
+   and fine on the other. Incompatible interfaces are not supported until a
+   weak/nonmatching coupling layer is added.
 
 The framework is therefore organized around three separate concerns:
 
@@ -111,14 +117,18 @@ the exact nested operations into a global projection framework prematurely.
 ## Keep Strong Coupling Conservative
 
 Strong DOF merging across patch interfaces is safe only when the two sides
-represent the same trace space and the same interface subdivision. If two
-patches have nonmatching hierarchical leaf elements on an interface, strong
+represent the same trace space and the same interface subdivision. The
+hierarchical spaces merge DOFs on each refinement level, where the interface
+parameterizations are compatible; the leaves then select among those merged
+functions, and they may differ from one side to the other. If the
+parameterizations themselves are incompatible on an interface, strong
 identification of DOFs becomes ambiguous or wrong.
 
-The current implementation therefore validates matching interface structure and
-throws if the hierarchy does not match. This is a deliberate restriction. It
-protects the correctness of the conforming space while leaving room for future
-weak coupling, mortar, Nitsche, DG, or projection-based interface methods.
+The current implementation therefore validates the interface mesh structure at
+every level and throws if it does not match. This is a deliberate restriction.
+It protects the correctness of the conforming space while leaving room for
+future weak coupling, mortar, Nitsche, DG, or projection-based interface
+methods.
 
 ## Separate Orientation From Identity
 
@@ -445,12 +455,32 @@ refinement.
 
 ## The Scalar Hierarchical Pattern
 
-The existing scalar hierarchical spaces already provide the main algorithm:
+The hierarchical spaces follow the truncated hierarchical B-spline (THB)
+construction:
 
-1. Choose leaf elements on each refinement level.
-2. Mark basis functions active if they touch leaf elements.
-3. Prune coarse functions whose support is replaced by refined descendants.
+1. Choose leaf elements on each refinement level. The leaves at level $l$ and
+   finer cover the domain $\Omega^l$, so
+   $\Omega^0 \supseteq \Omega^1 \supseteq \cdots$.
+2. Make a level-$l$ function active when its support lies in $\Omega^l$ and
+   not in $\Omega^{l+1}$.
+3. Truncate coarse active functions against the finer active ones.
 4. Build level-to-hierarchical extraction operators.
+
+Step 2 is computed in two passes per level. Every function whose support
+touches a level-$l$ leaf is a candidate. Then every level-$l$ cell covered by
+a coarser leaf, hence outside $\Omega^l$, removes each candidate whose support
+touches it. One internal helper, `basis::detail::levelActiveFunctions` in
+`src/basis/ThbActiveFunctions.hpp`, does this for the single-patch,
+multipatch, and vector hierarchical spaces; only their three implementation
+files include it.
+
+The rule does not assume one-level grading. An earlier pruning loop removed
+candidates only through covered cells that share a face with a level-$l$ leaf.
+That agrees with support containment while leaf levels differ by at most one
+across each face, but with a jump of two or more it could keep a function whose
+support leaves $\Omega^l$; a three-level test exposed this. Grading may still
+be imposed by the adaptive loop, for conditioning or bounded overlap, but
+conformity does not depend on it.
 
 For scalar multipatch spaces, this produces a global hierarchical scalar basis.
 
@@ -562,24 +592,63 @@ $$
 This split is important because orientation is patch-local. A global vector
 function can appear with different local signs on different patches.
 
-## Matching-Interface Validation
+## Interface Mesh Structure and Asymmetric Leaves
 
-Strong hierarchical multipatch coupling is currently allowed only when leaf
-elements match across every connected patch interface at every refinement level.
+Strong hierarchical multipatch coupling requires the same interface mesh
+structure at every refinement level, not the same leaves. Three checks enforce
+the structure:
 
-The validator:
+- the strong multipatch builders compare the tangential knot parameterizations
+  of glued sides (`validateStrongInterfaceCompatibility`);
+- the vector hierarchical builder compares the interface element counts of the
+  two sides under the side coordinate transform, level by level
+  (`validateInterfaceElementCounts`);
+- the hierarchical parametric atlas requires every coarse element to split, in
+  order, into the same number of children in each direction
+  (`validateChildIntervals`).
 
-1. iterates connected patch sides,
-2. collects leaf elements touching each side,
-3. projects element indices to side-local coordinates,
-4. applies the multipatch side permutation,
-5. compares the side-local leaf-element sets,
-6. throws if the sets do not match.
+Leaf selections may differ across an interface: one patch may be refined while
+its neighbour stays coarse. An earlier validator rejected any interface whose
+leaves differed. It has been removed, and the configurations it rejected are
+now built and tested.
 
-This is conservative by design. If a nonmatching interface is accepted
-silently, the resulting strongly coupled space can be mathematically wrong.
-Rejecting such cases forces nonmatching coupling to be handled by a future weak
-or projection-based interface method.
+Across such an interface, support containment does the work. A fine merged
+interface function whose support reaches the unrefined patch is inactive. The
+coarse merged function stays active and is truncated on the refined side. Fine
+functions active on the refined patch alone have zero trace on the interface.
+Truncation is applied per patch, which agrees with a global truncation because
+each patch's active set is the preimage of the one global active set.
+
+What is not supported is an incompatible interface: one whose two sides have
+different element decompositions or knots along the shared side at some
+background level. That case belongs to a future weak or mortar coupling. The
+multipatch combinatorial map's dart-pair constructor does not yet check that
+the two sides of a gluing have the same element decomposition
+(`outstanding_issues.txt`, item 15).
+
+## Coarse-Fine Interface Fragments
+
+Asymmetric leaves change what an interface trace record must hold. A coarse
+leaf side can face several fine leaf sides, so a record that names two whole
+element sides cannot say where the two traces meet.
+
+`TraceMeshInterface` (`src/basis/TraceMesh.hpp`) therefore records one common
+interface fragment. Each side names the leaf whose side contains the fragment,
+with a `TraceSideEmbedding`: a signed axis permutation
+(`topology::SideCoordinateTransform`) plus an offset and a scale per tangential
+axis, taken from the actual parametric intervals rather than from assumed
+dyadic index ratios. The fragment coordinate follows the first side's axes, so
+the second side's axes are the interface transform.
+
+`patchTraceMeshInterfaces` descends from each level-0 interface cell until it
+has met a leaf on both sides; that cell is the fragment. Each leaf pair is
+produced once, and a coarse leaf side is paired with every fine leaf side it
+faces. `traceInterfaceElement` still extracts each leaf's whole side, so
+evaluation or quadrature on a fragment must map its points through both
+embeddings.
+
+Same-patch coarse-fine faces are not subdivided yet:
+`interiorTraceMeshInterfaces` enumerates same-level leaf pairs only.
 
 ## Hierarchical L2
 
@@ -605,6 +674,43 @@ $$
 
 It also ensures pressure-like or scalar discontinuous spaces are available in
 the same hierarchical multipatch setting as the velocity/vector spaces.
+
+## Exactness Is a Separate Property
+
+Conforming traces do not make the hierarchical complex exact (Evans, Scott,
+Shepherd, Thomas, and Vazquez, 2020). Whether, for example,
+$\nabla V_0 = \ker(\nabla\times) \cap V_1$ holds depends on the leaf
+configuration, and published sufficient conditions identify configurations for
+which the complex is exact. Shepherd and Toshniwal (arXiv:2209.01504,
+Fig. 7(b)) give a single-patch refinement that creates an extra harmonic
+1-form.
+
+The construction here builds any nested leaf set its validators accept and
+checks no exactness condition. Exactness is measured instead, by a test-side
+gate in `test/SharedInterfaceRefinement_test.cpp`. It samples each space of the
+2D and 3D chains on every leaf, fits the discrete differentials, and checks
+that $d V_k \subseteq V_{k+1}$, that $d_{k+1} d_k = 0$, and that the Betti
+numbers in each degree are those of the domain. Thirty-one contractible
+two-patch and four-patch layouts in 2D and 3D, unrefined and refined, and a ring
+of eight patches pass. The gate also reproduces the published example, with
+its extra harmonic 1-form under homogeneous boundary conditions. These are
+measurements on fixtures, not a guarantee for any class of refinements.
+
+Which refinements an adaptive loop may produce is therefore an explicit choice
+per application: a pattern admissible for fluids need not be admissible for
+electromagnetics, and coupled problems need both. Space construction stays
+policy-free. The adaptive loop (estimation, marking, grading, and closure)
+lives in the separate StokesFlow code; this library builds the hierarchy from
+the refinements it requests and is to check admissibility independently, on
+request.
+
+The first check planned is an $n$-form support condition, patch by patch: for
+every level $l$, $\Omega^{l+1}$ is a union of supports of level-$l$ $L^2$
+functions. It is the per-patch multipatch analogue of
+Assumption 1 of Evans et al.; no multipatch theorem, exactness guarantee,
+commuting projection, or inf-sup guarantee is claimed. It needs no boundary
+conditions, since $n$-forms carry no trace condition. Electromagnetic and
+coupled policies are not yet supported and are to raise an error.
 
 # Geometry-Aware Evaluation: Coordinate Frames and Piola Transformations
 
@@ -908,6 +1014,18 @@ These provide explicit-active hierarchical vector patch spaces, hierarchical
 multipatch vector spaces, orientation-aware extraction, mapping helpers, and
 hierarchical $L^2$ construction.
 
+## THB Activity and Interface Fragments
+
+- `src/basis/ThbActiveFunctions.hpp`
+- `src/topology/SideCoordinateTransform.hpp`
+- `src/topology/SideCoordinateTransform.cpp`
+- `src/basis/TraceMesh.hpp`
+- `src/basis/TraceMesh.cpp`
+
+These provide the shared support-containment rule, the signed axis
+correspondence across glued sides, and the coarse-fine interface fragment
+records.
+
 ## Coordinate Frames and Piola Evaluation
 
 - `src/eval/SplineSpaceEvaluator.hpp`
@@ -936,7 +1054,13 @@ Representative test areas include:
   and $L^2$,
 - hierarchical vector multipatch construction,
 - orientation-through-extraction checks,
-- matching-interface rejection,
+- interface mesh-structure rejection,
+- asymmetric leaves across interfaces: active functions against an independent
+  support-containment oracle, truncation, extraction, and partition of unity,
+- coarse-fine fragment enumeration and off-node physical trace agreement over
+  every positive-orientation two-patch gluing class and selected four-patch
+  cycles,
+- the discrete-complex gate described in *Exactness Is a Separate Property*,
 - hierarchical $L^2$ construction.
 
 # Why These Choices Were Appropriate
@@ -969,9 +1093,9 @@ Bezier-projection framework.
 
 ## The Design Keeps Future Weak Coupling Possible
 
-Strong coupling is currently implemented only for matching interfaces, but the
-code does not erase nonmatching topology or trace information. Patch adjacency
-and one-sided traces remain available.
+Strong coupling is currently implemented only for interfaces whose level
+meshes match, but the code does not erase nonmatching topology or trace
+information. Patch adjacency and one-sided traces remain available.
 
 That means future weak coupling can be added without undoing the current
 strong-conforming work. For example, a later interface assembly layer can query
@@ -998,22 +1122,37 @@ traditional high-order finite-element-like spaces within the same framework.
 
 The current work intentionally does not solve every future problem.
 
-## Nonmatching Strong Interfaces Are Not Supported
+## Interface Parameterizations Must Be Compatible
 
-Hierarchical patch interfaces must match for strong coupling. This is a
-correctness restriction, not a missing optimization. Nonmatching interfaces
-should be handled later by weak or projection-based coupling.
+Every background refinement level has compatible interface parameterizations:
+the two sides of each interface have the same element decomposition and knots
+along the shared side. Active leaves are selected independently by patch and
+may be coarse on one side and fine on the other. This is a correctness
+restriction, not a missing optimization. Incompatible interfaces should be
+handled later by weak or projection-based coupling.
+
+## Refinement Admissibility Is Not Enforced
+
+Space construction accepts any nested leaf set its validators allow, and it is
+to stay policy-free. It neither grades the mesh nor checks a sufficient
+condition for exactness of the hierarchical complex. Admissibility is to be a
+separate, explicit check on request; the per-patch $n$-form support check
+described above is the first planned, and none exists yet. Grading, which is
+not admissibility, is done by the adaptive loop in StokesFlow. Only refinement
+is supported; coarsening is future work.
 
 ## Trace Extraction Is Algebraic, Not Physical
 
-The trace layer knows how extraction matrices restrict to sides. It does not yet
-compute:
+The trace layer knows how extraction matrices restrict to sides, and its
+interface records carry fragment embeddings. Off-node physical trace agreement
+across coarse-fine interfaces is verified in tests through
+`SplineSpaceEvaluator`, but the trace layer does not yet compute:
 
 - physical normals,
 - tangential directions,
 - Piola-transformed normal or tangential traces,
 - jumps or averages,
-- interface quadrature pairing,
+- quadrature on interface fragments,
 - penalty scaling.
 
 Those belong in the next layer.
@@ -1111,7 +1250,13 @@ The most important decisions are:
 - keep $L^2$ discontinuous while preserving topology,
 - construct hierarchical vector multipatch spaces from global active vector IDs,
 - store orientation as patch-local metadata,
-- reject nonmatching strong interfaces explicitly.
+- select hierarchical active functions by THB support containment, without
+  assuming grading,
+- require compatible interface parameterizations at every background level
+  while allowing asymmetric leaf selections,
+- keep space construction policy-free, with admissibility a separate check,
+- record coarse-fine interface fragments with explicit side embeddings,
+- measure exactness of the hierarchical complex separately from conformity.
 
 Together these choices keep the implementation mathematically faithful,
 testable, and extensible. They also leave the right openings for the next major

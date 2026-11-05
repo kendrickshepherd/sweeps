@@ -487,7 +487,11 @@ Current position:
     fixtures). Step 8 adds every two-patch rigid gluing class and five
     four-patch cycles, and step 9 the discrete-complex gate. Item 1 then
     continues with step 10: documentation, the full suite, and automatic
-    AMR with refinement admissibility as an explicit policy input.
+    AMR. The documentation and suite are done, and the plan was vetted on
+    2026-11-05 (outstanding_issues.txt, item 1, STEP 10): the adaptive
+    loop stays in StokesFlow, a separate repository; this library stays
+    policy-free and adds an opt-in per-patch n-form support check. Next
+    is 10.4, the two single-patch queries StokesFlow needs.
   - The volume Piola gate is complete.
   - Phase 5B is the next implementation task.
 
