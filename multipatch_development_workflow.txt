@@ -205,12 +205,24 @@ every positive-orientation rigid gluing class of two unit squares or cubes
 selected four-patch cycles (two around a 2D vertex, three around a 3D edge)
 with the diagonal patches refined at the junction.
 
+Step 9 measures the discrete de Rham complex in parametric coordinates on 31
+contractible layouts, unrefined and refined, and on a ring of eight patches:
+d maps each space into the next, d d = 0, and the Betti numbers per degree
+are those of the domain. It also reproduces a published non-exact
+single-patch hierarchy (Shepherd and Toshniwal, Fig. 7(b)) with its extra
+harmonic 1-form under homogeneous boundary conditions. These are
+measurements on fixtures, not an exactness guarantee: which refinements are
+admissible is a policy input, settled in item 1 step 10.
+
 Not yet verified (outstanding_issues.txt item 1):
 
   - leaf-level jumps above two, or in 3D,
   - eight cubes around a vertex, and other degrees, knots or leaf patterns
-    in the step 8 matrix, and
-  - discrete-complex exactness (step 9).
+    in the step 8 matrix,
+  - exactness guaranteed for any class of refinements (step 9 measures
+    fixtures; admissibility is a policy input, step 10),
+  - the complex under the physical (mapped) differentials, and
+  - homogeneous boundary conditions on multipatch hierarchies.
 
 Truly nonmatching patch meshes remain a future mortar or weak-coupling problem.
 
@@ -473,8 +485,9 @@ Current position:
     Cross-patch coarse-fine fragments are enumerated (item 1, step 6) and
     their off-node physical traces agree (step 7: 11 2D layouts, two 3D
     fixtures). Step 8 adds every two-patch rigid gluing class and five
-    four-patch cycles. Item 1 then continues with step 9, the
-    discrete-complex gate.
+    four-patch cycles, and step 9 the discrete-complex gate. Item 1 then
+    continues with step 10: documentation, the full suite, and automatic
+    AMR with refinement admissibility as an explicit policy input.
   - The volume Piola gate is complete.
   - Phase 5B is the next implementation task.
 

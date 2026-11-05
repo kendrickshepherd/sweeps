@@ -851,7 +851,8 @@ MEDIUM PRIORITY — Architectural / Correctness
    AMR POLICY.  A marked cell near a patch boundary stays local to its patch.
    Refinement propagates only where THB admissibility or an explicit
    refinement-class rule requires it, never merely because the cell touches
-   a multipatch interface.
+   a multipatch interface.  Which refinement classes are admissible is a
+   policy input, settled in step 10 (STEP 9 DECISION).
 
    ORDER (superseded by SEQUENCE 2026-10-20 below).
      1. Commit Step 10.
@@ -1002,11 +1003,14 @@ MEDIUM PRIORITY — Architectural / Correctness
      7. Off-node physical H1, H(div) and H(curl) trace tests.
         [DONE: STEP 7 below; 48a8047]
      8. 2D/3D orientation, refinement-direction, junction and cycle matrix.
-        [SECOND HALF IMPLEMENTED 2026-10-29, review hardenings applied
-        2026-10-30: STEP 8 below; first half 8ac1c2e]
+        [DONE: STEP 8 below; 8ac1c2e and cb32164]
      9. A separate discrete-complex gate: composition to zero, plus
         rank/nullity exactness on a contractible fixture.
-    10. Documentation, full suite, then automatic AMR.
+        [IMPLEMENTED 2026-11-04 with per-degree Betti numbers and a
+        published non-exact fixture; reviewed and corrected the same
+        day, awaiting commit: STEP 9 below]
+    10. Documentation, full suite, then automatic AMR, with refinement
+        admissibility as an explicit policy input (STEP 9 DECISION).
    STEP 2 RESULT (2026-10-20).  Which exception each current rejection
    reaches, MEASURED by mutation probe: each of validateMatchingInterfaces'
    two throws in turn was changed to std::runtime_error, the three binaries
@@ -2015,6 +2019,370 @@ MEDIUM PRIORITY — Architectural / Correctness
              this substitution, the review's concern was real.
        Runs after the hardenings: SIR 11970 assertions in 14 cases; full ctest
          240/240 (136 s).
+     COMMITTED 2026-11-02 by the user as cb32164 "Verify asymmetric
+       refinement around multipatch cycles".
+     STEP 9 (first half 2026-11-02; completed 2026-11-04 and corrected
+       after review the same day, with Q5's fix; IMPLEMENTED, awaiting
+       commit).  The discrete-complex gate
+       (test/SharedInterfaceRefinement_test.cpp, seven cases).  E9 as
+       AMENDED: steps 4-8 show conforming traces, and exactness does not
+       follow from them.  This gate measures, per fixture, the inclusions
+       d V_k in V_k+1, the composition d d = 0 and the ranks of the
+       differentials.  It checks no published condition for exactness;
+       admissibility is a policy, moved to step 10 (DECISION below).
+     Chains.  2D: H1 -grad-> H(curl) -rot-> L2 and H1 -curl-> H(div)
+       -div-> L2, with curl phi = (d1 phi, -d0 phi) and rot u = d0 u1 -
+       d1 u0.  3D: H1 -grad-> H(curl) -curl-> H(div) -div-> L2.  H(curl)
+       and H(div) are built from the glued H1 by
+       buildHCurlHierarchicalMultiPatchSplineSpace and
+       buildHDivHierarchicalMultiPatchSplineSpace, and L2 from H(div) by
+       buildL2HierarchicalMultiPatchSplineSpace.
+     Method (sampleLeaves, chainOutcome).  Each space of a chain is
+       sampled on every leaf at the 3^dim grid {0.13, 0.47, 0.86}, in the
+       patch's parametric coordinates, with first derivatives with respect
+       to them.  A sample is keyed by patch and parametric point.  The
+       spaces of a chain must share the keys, and two leaves may not share
+       one.  For space k, A_k holds the samples, dA_k the samples of the
+       image under d_k, and G_k = A_k^T A_k (sparse, then a dense LDLT):
+         D_k           G_k+1^-1 A_k+1^T dA_k, the normal-equations fit
+         inclusion     max|A_k+1 D_k - dA_k| / max(max|dA_k|, 1)
+         composition   max|D_k+1 D_k| / (max|D_k+1| max|D_k|), zero
+                       over zero being zero (compositionResidual)
+         independence  sqrt(lambda_min / lambda_max) of G_k
+         rank_k        singular values of D_k (BDCSVD) above 1e-8 times
+                       the largest, and zero for an empty or zero
+                       spectrum (countRank); the kernel edge is the
+                       largest relative value counted zero, the image
+                       edge the smallest counted nonzero
+         b_k           n_k - rank_k - rank_k-1
+       ARGUED, not tested: the Piola maps commute with the differentials,
+       so the parametric relations are the physical ones patch by patch.
+       On each leaf every function and image is a polynomial of degree at
+       most 2 per axis, which the grid determines.  So equal samples are
+       equal functions, and A_k is injective iff the basis is independent.
+       The grid avoids leaf boundaries; conformity across interfaces
+       enters only through the spaces themselves (steps 7 and 8).
+     Assertions (complexProblems, complexGate).  Per chain: inclusion and
+       composition below 1e-12, independence above 1e-3, kernel edge
+       below 1e-12 and image edge above 1e-3, each failing on a NaN or
+       an infinity (Nonfinite values below); then Betti numbers per
+       degree, each wrong degree its own line, "b_k = got, expected e" (a
+       wrong count of degrees is one more line).  complexGate expects 1
+       in degree 0, loops in degree 1 and zeros above, sized by the
+       layout's dimension.  A throw is reported per layout and the later layouts
+       still run.  Each case pins its layout and chain counts.
+     Nonfinite values (Q5, fixed 2026-11-04).  std::max and std::min
+       return their first argument when the second is NaN, so before the
+       fix a NaN met while accumulating was dropped.  Every metric now
+       accumulates through maxOrNaN and minOrNaN, which give NaN when
+       either operand is NaN or infinite, and maxAbsOrNaN, which gives
+       NaN when any entry is; once NaN, a metric stays NaN.  A nonfinite
+       Gram matrix is not decomposed (independence NaN), nor is a
+       nonfinite matrix in countRank (rank zero, both edges NaN, a NaN
+       null space).  ARGUED-FROM-CODE: Eigen 3.4.0's BDCSVD
+       (deps/eigen-install, BDCSVD.h:272-277) returns InvalidInput on a
+       nonfinite matrix and leaves its singular values unset, so the old
+       countRank would have read indeterminate values.  complexProblems
+       now requires each metric finite as well as within its tolerance,
+       as does case 4's inclusion check.  Composition follows the
+       user's rule (compositionResidual): NaN if the numerator or the
+       denominator is nonfinite; zero over zero is zero, since a zero
+       differential is valid; a nonzero numerator over zero is NaN.
+       ARGUED-FROM-CODE: with finite entries that last branch cannot
+       occur (if the denominator rounds to zero, so does every product
+       term), so it is defensive and not tested.  Solver non-convergence
+       on finite input is not checked (Not covered).
+     Fixtures.  contractibleLayouts() returns 31 layouts:
+         - the 16 2D two-patch layouts of step 8;
+         - the first 3D two-patch layout of each of the 10 orientation
+           classes, in generation order (read from a temporary print,
+           removed): sides 0/1 ZeroToZero 0 reversed; 0/0 ZeroToZero 1;
+           0/0 ZeroToTwo 1; 0/1 ZeroToTwo 2; 0/0 ZeroToOne swapped 0; 0/1
+           ZeroToOne swapped 1; 0/1 ZeroToThree swapped 1; 0/0
+           ZeroToThree swapped 2; 1/1 ZeroToOne swapped 2; 1/1
+           ZeroToThree swapped 0;
+         - step 8's five cycles.
+       That is 49 chains (two per 2D layout, one per 3D).  Case 1 clears
+       the leaves; case 2 keeps step 8's (STEP 8 Refinement, SECOND HALF
+       Layout).  Case 3 (ringLayout): eight identity-placed unit patches
+       at shifts (0,0) (1,0) (2,0) (2,1) (2,2) (1,2) (0,2) (0,1), glued
+       wherever two shifts differ by one along an axis (glueTouching).
+       That is an annulus in 2D and a solid torus in 3D, with 16 directed
+       connections (pinned).  Refined, level 1 bisects x and y, and patch
+       0 refines its elements at x-index 1, facing patch 1; the one (3D:
+       two) at y-index 1 also meets patch 7.  Unrefined and refined, in
+       2D and 3D, loops = 1: 6 chains.  Case 4 is the negative control
+       (ungluedH1Outcomes): each chain starts from an H1 built on the same
+       patches and leaves with no connections, while the vector spaces
+       still come from the glued H1.  It runs on the first 2D and 3D
+       two-patch layouts (unrefined), the last ones (refined) and the
+       five cycles, 13 chains; each must have inclusion above 0.1.
+     MEASURED (probe instrumentation, removed).  The probe's fixtures and
+       algebra match the final block token for token apart from timers and
+       comments.  Its 3D two-patch family was all 144 layouts, unrefined
+       and refined (Exhaustive probe below).  Worst over every chain:
+         inclusion 4.4e-15     composition 2.2e-14   independence 2.1e-2
+         kernel edge 3.6e-15   image edge 4.8e-2
+       Every contractible chain has Betti numbers (1, 0, 0) in 2D and
+       (1, 0, 0, 0) in 3D; the rings have (1, 1, 0) and (1, 1, 0, 0).  The
+       control's residuals are 0.41 to 0.64.
+     Dimensions, observations (not asserted).  Within each family every
+       layout, and both 2D chains, agree:
+                                unrefined           refined
+         2D two-patch n       28   45   18         28   47   20
+                      rank    27   18    0         27   20    0
+         3D two-patch n      112  264  207   54   126  309  254   70
+                      rank   111  153   54    0   125  184   70    0
+         2D cycles    n       49   84   36         51   92   42
+         3D cycles    n      196  483  396  108   204  521  444  126
+         2D ring      n       96  168   72        101  180   79
+         3D ring      n      384  960  792  216   404 1023  856  237
+       The other ranks follow from the Betti numbers.  The refined 2D
+       two-patch H1 keeps dimension 28: its added level-1 functions all
+       have a nonzero trace on the interface, where the neighbour is
+       coarse.  Unglued it has dimension 34 (32 unrefined).  ARGUED by
+       hand count: 34 - 28 = 6 is the dimension of the sum of the two
+       sides' interface trace spaces (5 + 5 - 4), so here the glued H1 is
+       the whole conforming subspace.
+     Exhaustive probe, MEASURED (not routine).  All 144 3D two-patch
+       layouts, unrefined and refined, are exact under the assertions
+       above; 55 s with this algebra (131 s with dense SVD and QR).  The
+       routine cases keep one layout per class (Q4).
+     Published non-exact fixture (twoSquaresH1, case 5).  Shepherd &
+       Toshniwal, arXiv 2209.01504 (FoCM 26(1):525-567), Sec. 5.2.1,
+       Fig. 7(b) with its harmonic in Fig. 8(b), in the arXiv source's
+       numbering (the FoCM numbering is not checked).  Read from the
+       figure's TikZ: one patch on [0,7]^2, 7 x 7 elements, biquadratic,
+       maximally smooth, open knots; level 1 bisects every element in
+       [1,4]^2 and [3,6]^2, which share the element [3,4]^2.  The
+       figure's coarse Greville coordinates (0, 0.5, 1.5, ..., 7) fix
+       degree 2.  Caption: "refinement from two topological balls to a
+       single topological ball".  Text: merging two components of the
+       coarse Greville subgrid creates a harmonic 1-form; only
+       configuration (d) is said to create two.  Fig. 8(b) shows one
+       harmonic 1-form.  Its image file is named "p3", but the ParaView
+       pipeline in that screenshot reads "deg2_reg1".
+       The configuration is symmetric under transposition and under the
+       central reflection, and a reflection in one axis gives a rotated
+       copy, so the leaf-index convention cannot change the result.
+       Omega_1 is the union of the supports of two level-0 biquadratic
+       B-splines (0-forms), so it meets Shepherd-Toshniwal's Assumption
+       2.  It is also a union of supports of level-0 L2 B-splines (degree
+       (1,1), 2-forms), so it meets Evans et al.'s support assumption
+       (Assumption 1 in their arXiv source, 5.6 as Shepherd-Toshniwal
+       cite it) and is n-form-driven.
+     Boundary conditions.  The paper's spaces carry homogeneous ones
+       (its Sec. 1): j-forms with vanishing trace for j < n, n-forms
+       free; exact means 0 0 1 in 2D.  So the pin needs them.
+       boundaryTraces samples each space on every leaf side lying on the
+       box [0,7]^2, three points per tangential direction (so three per
+       side in 2D, nine per face in 3D), in the parametric frame: H1
+       values, H(curl) tangential and H(div) normal components, L2
+       nothing.  Given a box, chainOutcome also takes the orthonormal
+       null space Z_k of those samples (BDCSVD, the same rank rule, its
+       edges in the same edges) and
+         bc inclusion  max|T_k+1 D_k Z_k| / max(max|dA_k Z_k|, 1)
+         bc rank_k     rank of D_k Z_k (same rule, same edges)
+         bc b_k        dim Z_k - bc rank_k - bc rank_k-1
+       complexProblems, given expected zero-trace Betti numbers, requires
+       bc inclusion below 1e-12 and reports them per degree as "zero
+       traces, b_k = ...".  Without a box nothing changes; the other
+       cases pass none.  ARGUED: three points per tangential direction
+       determine a trace of degree at most 2 in each, so Z_k is the
+       zero-trace subspace.
+     Expected, by class.  PUBLISHED means read from the paper, not
+       re-derived.  The paper pins only the zero-trace refined complex
+       and its one harmonic 1-form, in its complex of forms; a 1-form's
+       trace is its tangential part, so that is our grad-rot chain.
+       curl-div has the same counts by rotation: R(u0, u1) = (u1, -u0)
+       maps grad-rot onto curl-div (R grad = curl, div R = rot) and
+       tangential traces onto normal ones.  That is ARGUED, not
+       independently published.  All four rows are also MEASURED below.
+         zero traces, refined    0 1 1   PUBLISHED for grad-rot (Fig.
+                                         7(b), 8(b)); curl-div ARGUED
+         zero traces, unrefined  0 0 1   the paper's exact (its Sec. 1)
+         no BC, unrefined        1 0 0   tensor-product exactness
+         no BC, refined          1 1 0   ARGUED below and MEASURED;
+                                         not published
+       Dimensions, ARGUED by hand from the selection rule (a level-l
+       B-spline is active when its support lies in Omega_l and not in
+       Omega_l+1) and asserted:
+                         H1  H(curl)  L2     zero traces  H1  H(curl)  L2
+         unrefined       81    144    64                  49    112    64
+         refined        111    216   105                  79    184   105
+       Refined H1 81 - 2 + 2*16; each H(curl) component 72 - 4 + 2*20;
+       L2 64 - 8 + (2*25 - 1).  No level-1 support straddles the shared
+       element.  The Euler characteristic falls from 1 to 0 with and
+       without boundary conditions, so neither refined complex is exact
+       on dimensions alone.
+     ARGUED, no BC, refined.  Traces give a short exact sequence of
+       complexes 0 -> V_0 -> V -> tr V -> 0.  Refinement is interior, so
+       tr V is the level-0 complex on the boundary loop, cohomology 1 1
+       (dimensions 32 and 32, connected).  With V_0 at 0 1 1: H0(V) = 1
+       maps onto H0(tr V), so H1(V_0) -> H1(V) is injective.  The
+       connecting map H1(tr V) -> H2(V_0) sends a loop form of nonzero
+       integral to a class of nonzero integral; since b_2(V_0) = 1,
+       rot V_0^1 is exactly the mean-zero part, so the map is an
+       isomorphism of lines.  Hence H1(V) = 1 and H2(V) = 0.
+     Case 5 asserts, per fixture (unrefined, refined): the leaf count
+       (49; 32 + 4*17); and per chain (grad-rot, curl-div) the
+       complexProblems list above with both expectations, and the
+       dimensions with and without zero traces.  For the refined
+       fixture, per chain, the contractible expectation (1 0 0, zero
+       traces 0 0 1) must fail in exactly two lines, "b_1 = 1, expected
+       0" and "zero traces, b_1 = 1, expected 0"; and, as its own
+       assertion, one zero-trace harmonic 1-form in each of its two
+       chains (published for grad-rot, by rotation for curl-div).  A
+       throw is reported per fixture.
+     MEASURED, case 5 (probe print, removed; restored byte-identical,
+       cmp).  Both chains agree.
+                      ranks          bc ranks      Betti   bc Betti
+         unrefined    80 64 0        49 63 0       1 0 0   0 0 1
+         refined     110 105 0       79 104 0      1 1 0   0 1 1
+       Worst: inclusion 1.5e-15, composition 4.2e-15, bc inclusion
+       1.6e-15, independence 7.0e-2, kernel edge 1.8e-15, image edge
+       6.7e-2.  So the no-BC result agrees with the argument, and the
+       defect sits in degree 1 only: the last differential (rot, div)
+       keeps its expected rank, refined as unrefined.
+     Case 6, compositionResidual directly on 2 x 2 matrices.  A zero
+       D_k, a zero D_k+1 and both zero must each give exactly 0.  Two
+       controls: d = (1 2; 3 4) with itself must give 22/16, so zero over
+       zero does not make every residual zero; and a zero D_k+1 after a
+       D_k with an infinite entry must give NaN, so zero over zero hides
+       no nonfinite entry.
+     Bypass probe (MEASURED, 2026-11-04; restored byte-identical, cmp).
+       Case 6 on the previous composition, plain numerator over
+       denominator: the three zero-over-zero checks failed with NaN, and
+       the two controls passed.
+     Case 7, the nonfinite regression.  The unrefined case-5 patch, zero
+       traces on [0,7]^2, through complexOutcomes with a perturbation of
+       the samples: an added parameter of chainOutcome and
+       complexOutcomes, empty by default and applied right after
+       sampling.  Three fixtures, both chains each, a throw reported per
+       fixture.  The control, unperturbed, must report nothing.  A NaN in
+       the first H1 sample's first derivative must report, of the five
+       metric lines, exactly inclusion, composition, rank and zero-trace
+       inclusion; an infinity in the first L2 sample's value exactly
+       inclusion, composition, independence and rank.  Betti lines may
+       appear and are not asserted: the rank of a nonfinite matrix is
+       set to zero, not measured.  One line reports both rank edges, so
+       each perturbed chain must also leave both edges nonfinite.
+     Bypass probe (MEASURED, 2026-11-04; restored byte-identical, cmp).
+       Case 7 and the perturbation parameter alone, on the pre-fix
+       accumulation and comparisons, under a 300 s alarm: the case
+       failed.  The control passed; each of the four perturbed chains
+       reported none of its expected metric lines and left both rank
+       edges finite.  So with the old accumulation no nonfinite value
+       reached complexProblems from these two perturbations; with the
+       fix each reaches it.  This bounds only these two substitutions.
+     Evidence.  MEASURED on 31 contractible layouts, each unrefined and
+       with one leaf pattern, and four rings: degree 2, two elements per
+       axis at level 0, two levels, parametric sampling.  Unrefined
+       exactness is the expected multipatch tensor-product result, not
+       re-derived here.  Refined exactness is MEASURED only; no condition
+       is checked that would guarantee it for these leaves (DECISION
+       below).  The
+       rings show the rank count sees a nonzero b_1.  The control shows
+       the inclusion residual sees an unglued interface, and bounds only
+       that substitution.  Case 5 shows the per-degree count sees a
+       wrong b_1 on one patch: the published one (zero traces) and the
+       argued one (no boundary conditions).  It also shows that
+       full-complex inexactness can coexist with the expected tail
+       cohomology under an n-form-driven refinement.  It does not show
+       that refinement admissible or stable for fluids.  It is one
+       fixture: it refutes "n-form-driven implies exact", and nothing
+       more.  Fixtures refute, never prove.
+     Not covered.  Physical evaluation, so whether the physical
+       differentials commute with the Piola maps (Q2: tracked separately,
+       not in step 9): no geometry is built, so the curved map of steps
+       7 and 8 plays no part.  Degrees other than 2,
+       other knot layouts, three or more levels, eight cubes around a
+       vertex, a cavity (b_2), boundary conditions beyond case 5's
+       single patch, a non-exact multipatch hierarchy, and the leaf
+       patterns the cited conditions exclude, apart from case 5.  Solver
+       non-convergence on finite input: neither
+       SelfAdjointEigenSolver::info() nor BDCSVD's is checked.
+     Runs (first half).  SIR 11984 assertions in 18 cases (11970 in 14
+       before); the four cases took 2.9, 5.0, 5.6 and 4.2 s.  Full ctest
+       244/244 (129 s).  No added SIR line exceeds 120 columns.
+     Runs (completed, 2026-11-04).  Full build, no warnings.  SIR 11987
+       assertions in 19 cases (11984 in 18 before); the five step-9
+       cases took 2.6, 4.2, 3.6, 2.3 and 0.27 s.  Full ctest 245/245
+       (118 s).  No added SIR line exceeds 120 columns.
+     Runs (review corrections, 2026-11-04).  countRank changed, so the
+       full suite was rerun.  Full build, no warnings.  SIR 11987
+       assertions in 19 cases, unchanged; the five step-9 cases took 4.3,
+       6.2, 5.1, 3.5 and 0.39 s (the whole run was slower, step 8's
+       two-patch case 15.8 s against 8.8).  Full ctest 245/245 (139 s).
+     Runs (Q5, 2026-11-04).  Full build, no warnings.  SIR 11989
+       assertions in 20 cases (11987 in 19 before); the six step-9 cases
+       took 2.6, 4.0, 3.3, 2.1, 0.25 and 0.23 s.  Full ctest 246/246
+       (107 s).  No added SIR line exceeds 120 columns.
+     Runs (zero differential, 2026-11-04).  Full build, no warnings.
+       SIR 11994 assertions in 21 cases (11989 in 20 before); the seven
+       step-9 cases took 4.4, 6.4, 5.4, 3.4, 0.39, 0.00 and 0.35 s.  Full
+       ctest 247/247 (136 s).  No added SIR line exceeds 120 columns.
+     DECISION (2026-11-04, the user; resolves Q1).  Refinement
+       admissibility is a policy, an explicit input, and moves to step
+       10.  Step 9 checks no published condition for exactness; case 5
+       answers Q1's second half.  Proposed for step 10, to be vetted
+       there:
+         - Three layers.  Space construction stays structural: it builds
+           any nested leaf set it accepts today and never checks or
+           silently assumes an exactness condition.  Production AMR takes
+           a policy and applies that policy's closure to the marks before
+           construction, as GRADING does for grading.  Published
+           sufficient conditions are test-side oracles only.
+         - Policy as input.  A pattern admissible for fluids need not be
+           for EM, and the reverse; MHD needs both.  The intended
+           policies target different admissible classes; no global
+           inclusion ordering is currently claimed.  The published
+           conditions are partly incomparable themselves: Evans et al.
+           admit n-form-driven domains that Shepherd-Toshniwal's 0-form
+           Assumption 2 excludes, and Shepherd-Toshniwal's Assumption 3
+           admits patterns that Evans et al.'s overlap assumption
+           excludes (Shepherd-Toshniwal, Sec. 5.2.2 of the arXiv source).
+         - For fluids the user expects n-form refinement may suffice when
+           the whole complex is not needed; that is open.  Case 5 shows
+           only that full-complex inexactness can coexist with the
+           expected tail cohomology; it does not show the refinement
+           admissible or stable for fluids.
+         - Each policy is written as a contract before code: a predicate
+           on leaf sets, a closure taking marks to an admissible
+           superset, and the guarantee bought (which degrees are exact,
+           under which boundary conditions), with its reach across
+           interfaces, junctions and coarsening.
+         - A composite policy (MHD) closes under both predicates to a
+           fixed point; its contract states whether the closures
+           commute.
+         - A refined hierarchy records policy provenance; validity comes
+           from the policy's closure, check or certificate, never from
+           the metadata alone.
+         - Inf-sup and spectral tests are separate from exactness, per
+           policy, in step 10.
+         - Boundary conditions are step 10's tail: the published
+           statements use homogeneous ones, and case 5's zero-trace chain
+           is test-side only.
+     QUESTIONS FOR VETTING (Q1 resolved by the DECISION above, Q2-Q4 by
+       the review of 2026-11-04, Q5 by the user the same day).
+       Q2. Parametric sampling only, or also the physical differentials
+           on the curved geometry, to test the Piola argument directly?
+           RESOLVED: parametric exactness suffices for step 9.  Physical
+           differential commutation is tracked separately (Not covered),
+           outside this commit.
+       Q3. Keep the gate in SharedInterfaceRefinement_test.cpp (now 3394
+           lines; it uses step 8's layout helpers), or move it to its own
+           file?  RESOLVED: keep it there for now.  Moving it requires
+           extracting shared fixture infrastructure and adds no evidence.
+       Q4. Routine 3D coverage: one two-patch layout per orientation
+           class, as now, or all 144 (about 55 s more per run)?
+           RESOLVED: one routine layout per orientation class; the
+           measured all-144 run is supplemental evidence.
+       Q5. Should the accumulated measures propagate NaN, so that a NaN
+           met while accumulating fails its check?  RESOLVED (the user):
+           yes, in this commit, and infinities too; a certification gate
+           must not silently discard invalid arithmetic (Nonfinite values
+           above, case 7).
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces

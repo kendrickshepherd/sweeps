@@ -15,11 +15,13 @@
 #include <TPSplineSpace.hpp>
 #include <CombinatorialMapMethods.hpp>
 #include <Eigen/Dense>
+#include <Eigen/Sparse>
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <optional>
@@ -2935,6 +2937,822 @@ TEST_CASE( "Placed four-patch cycles: junction classes, leaves, fragments and ph
             problems.insert( problems.end(), t.problems.begin(), t.problems.end() );
         }
     }
+    INFO( joined( problems ) );
+    CHECK( problems.empty() );
+}
+
+// Step 9: the discrete complex, sampled in each patch's parametric
+// coordinates.  Piola maps commute with the differentials, so these are the
+// physical relations patch by patch.  On each leaf every function and image
+// is a polynomial of degree at most 2 per axis, which a 3^dim grid
+// determines, so equal samples are equal functions.
+namespace
+{
+    enum class Derivative
+    {
+        Grad,
+        Curl,
+        Rot,
+        Div,
+        None
+    };
+
+    // derivs: rows local functions, columns direction * ncomp + component.
+    Eigen::MatrixXd
+        applyDerivative( const Derivative d, const Eigen::MatrixXd& derivs, const size_t dim, const size_t ncomp )
+    {
+        const auto at = [&]( const size_t dir, const size_t comp ) { return derivs.col( dir * ncomp + comp ); };
+        Eigen::MatrixXd out;
+        switch( d )
+        {
+            case Derivative::Grad:
+                out.resize( derivs.rows(), dim );
+                for( size_t g = 0; g < dim; g++ ) out.col( g ) = at( g, 0 );
+                break;
+            case Derivative::Curl:
+                if( ncomp == 1 )
+                {
+                    out.resize( derivs.rows(), 2 );
+                    out.col( 0 ) = at( 1, 0 );
+                    out.col( 1 ) = -at( 0, 0 );
+                }
+                else
+                {
+                    out.resize( derivs.rows(), 3 );
+                    out.col( 0 ) = at( 1, 2 ) - at( 2, 1 );
+                    out.col( 1 ) = at( 2, 0 ) - at( 0, 2 );
+                    out.col( 2 ) = at( 0, 1 ) - at( 1, 0 );
+                }
+                break;
+            case Derivative::Rot:
+                out.resize( derivs.rows(), 1 );
+                out.col( 0 ) = at( 0, 1 ) - at( 1, 0 );
+                break;
+            case Derivative::Div:
+                out = Eigen::MatrixXd::Zero( derivs.rows(), 1 );
+                for( size_t g = 0; g < dim; g++ ) out.col( 0 ) += at( g, g );
+                break;
+            case Derivative::None: break;
+        }
+        return out;
+    }
+
+    struct LeafSample
+    {
+        std::vector<FunctionId> conn;
+        Eigen::MatrixXd values;      // local function, component
+        Eigen::MatrixXd derivatives; // local function, component of the image
+    };
+
+    using SampleKey = std::vector<long>; // patch, then the parametric point in 1e-9 units
+
+    // Throws if two leaves place a sample at the same patch point.
+    std::map<SampleKey, LeafSample> sampleLeaves( const SplineSpace& ss, const Derivative d )
+    {
+        const auto& cmap =
+            dynamic_cast<const HierarchicalMultiPatchCombinatorialMap&>( ss.basisComplex().parametricAtlas().cmap() );
+        const size_t dim = cmap.dim();
+        const std::array<double, 3> grid = { 0.13, 0.47, 0.86 };
+        size_t n_points = 1;
+        for( size_t k = 0; k < dim; k++ ) n_points *= grid.size();
+        eval::SplineSpaceEvaluator evals( ss, 1 );
+        std::map<SampleKey, LeafSample> out;
+        for( const Cell& c : topCells( cmap ) )
+        {
+            const size_t patch = leafKeyOf( cmap, c ).at( 1 );
+            evals.localizeElement( c );
+            const std::vector<FunctionId> conn = ss.connectivity( c );
+            for( size_t i = 0; i < n_points; i++ )
+            {
+                Eigen::VectorXd xi( dim );
+                for( size_t k = 0, rest = i; k < dim; k++, rest /= grid.size() )
+                    xi( k ) = grid.at( rest % grid.size() );
+                evals.localizeParentPoint( cubePoint( xi ) );
+                const Eigen::VectorXd p = evals.evaluateParametricPoint();
+                SampleKey key{ static_cast<long>( patch ) };
+                for( Eigen::Index k = 0; k < p.size(); k++ ) key.push_back( std::lround( p( k ) * 1e9 ) );
+                LeafSample s{ conn, evals.evaluateBasisValuesAtParentPoint(), Eigen::MatrixXd() };
+                if( d != Derivative::None )
+                    s.derivatives = applyDerivative( d,
+                                                     evals.evaluateBasisFirstDerivativesWrtParametricCoordinates(),
+                                                     dim,
+                                                     ss.numVectorComponents() );
+                if( not out.emplace( key, s ).second ) throw std::runtime_error( "two leaves share a sample point" );
+            }
+        }
+        return out;
+    }
+
+    enum class Trace
+    {
+        Value,
+        Tangential,
+        Normal,
+        None
+    };
+
+    // Trace samples where leaf sides lie on the sides of the box [lo, hi]^dim:
+    // rows sample and constrained component, columns functions.  Three points
+    // per tangential direction determine a trace of degree at most 2 in each.
+    Eigen::MatrixXd boundaryTraces( const SplineSpace& ss, const Trace trace, const double lo, const double hi )
+    {
+        const Eigen::Index nf = Eigen::Index( ss.numFunctions() );
+        if( trace == Trace::None ) return Eigen::MatrixXd( 0, nf );
+        const auto& cmap = ss.basisComplex().parametricAtlas().cmap();
+        const size_t dim = cmap.dim();
+        const std::array<double, 3> grid = { 0.13, 0.47, 0.86 };
+        size_t n_points = 1;
+        for( size_t k = 0; k + 1 < dim; k++ ) n_points *= grid.size();
+        eval::SplineSpaceEvaluator evals( ss, 0 );
+        std::vector<Eigen::RowVectorXd> rows;
+        for( const Cell& c : topCells( cmap ) )
+        {
+            evals.localizeElement( c );
+            const std::vector<FunctionId> conn = ss.connectivity( c );
+            for( size_t side = 0; side < 2 * dim; side++ )
+                for( size_t i = 0; i < n_points; i++ )
+                {
+                    Eigen::VectorXd xi( dim );
+                    for( size_t k = 0, rest = i; k < dim; k++ )
+                    {
+                        if( k == side / 2 )
+                            xi( k ) = double( side % 2 );
+                        else
+                        {
+                            xi( k ) = grid.at( rest % grid.size() );
+                            rest /= grid.size();
+                        }
+                    }
+                    evals.localizeParentPoint( cubePoint( xi ) );
+                    const Eigen::VectorXd p = evals.evaluateParametricPoint();
+                    std::vector<size_t> normal;
+                    for( size_t g = 0; g < dim; g++ )
+                        if( std::abs( p( g ) - lo ) < geom_tol or std::abs( p( g ) - hi ) < geom_tol )
+                            normal.push_back( g );
+                    if( normal.empty() ) continue;
+                    if( normal.size() > 1 ) throw std::runtime_error( "a side sample sits on an edge of the box" );
+                    const Eigen::MatrixXd values = evals.evaluateBasisValuesAtParentPoint();
+                    for( size_t comp = 0; comp < ss.numVectorComponents(); comp++ )
+                    {
+                        const bool tangential = comp != normal.front();
+                        if( ( trace == Trace::Tangential and not tangential ) or
+                            ( trace == Trace::Normal and tangential ) )
+                            continue;
+                        Eigen::RowVectorXd row = Eigen::RowVectorXd::Zero( nf );
+                        for( size_t j = 0; j < conn.size(); j++ )
+                            row( Eigen::Index( conn.at( j ).id() ) ) =
+                                values( Eigen::Index( j ), Eigen::Index( comp ) );
+                        rows.push_back( row );
+                    }
+                }
+        }
+        Eigen::MatrixXd out( Eigen::Index( rows.size() ), nf );
+        for( size_t r = 0; r < rows.size(); r++ ) out.row( Eigen::Index( r ) ) = rows.at( r );
+        return out;
+    }
+
+    struct ChainSpace
+    {
+        std::string name;
+        const SplineSpace* ss;
+        Derivative d;
+        Trace trace; // set to zero by homogeneous boundary conditions
+    };
+
+    struct ChainOutcome
+    {
+        std::vector<size_t> dims;
+        std::vector<size_t> ranks; // of d_k; zero for the last space
+        std::vector<long> betti;
+        double inclusion = 0;    // fitting residual of d V_k in V_k+1, relative
+        double composition = 0;  // d_k+1 d_k, relative
+        double independence = 1; // smallest singular value of the samples, relative
+        double kernel_edge = 0;  // largest singular value of a d_k counted zero, relative
+        double image_edge = 1;   // smallest counted nonzero, relative
+        std::vector<std::string> problems;
+        // With homogeneous boundary conditions, if a box was given.
+        std::vector<size_t> bc_dims;
+        std::vector<size_t> bc_ranks;
+        std::vector<long> bc_betti;
+        double bc_inclusion = 0; // trace of d of a zero-trace function, relative
+    };
+
+    constexpr double rank_tol = 1e-8;
+
+    // std::max and std::min return their first argument if the second is NaN.
+    // Metrics accumulate through these instead: a NaN or an infinity becomes
+    // NaN and stays.
+    constexpr double nonfinite = std::numeric_limits<double>::quiet_NaN();
+
+    double maxOrNaN( const double a, const double b )
+    {
+        return std::isfinite( a ) and std::isfinite( b ) ? std::max( a, b ) : nonfinite;
+    }
+
+    double minOrNaN( const double a, const double b )
+    {
+        return std::isfinite( a ) and std::isfinite( b ) ? std::min( a, b ) : nonfinite;
+    }
+
+    // Zero if empty; NaN if an entry is not finite.
+    double maxAbsOrNaN( const Eigen::MatrixXd& m )
+    {
+        if( not m.allFinite() ) return nonfinite;
+        return m.size() == 0 ? 0 : m.cwiseAbs().maxCoeff();
+    }
+
+    // max|D_k+1 D_k| / (max|D_k+1| max|D_k|).  Zero over zero is zero: a zero
+    // differential is valid.  NaN if an entry is nonfinite, or if a nonzero
+    // numerator meets a zero denominator.
+    double compositionResidual( const Eigen::MatrixXd& next, const Eigen::MatrixXd& d )
+    {
+        const double numerator = maxAbsOrNaN( next * d );
+        const double denominator = maxAbsOrNaN( next ) * maxAbsOrNaN( d );
+        if( not std::isfinite( numerator ) or not std::isfinite( denominator ) ) return nonfinite;
+        if( denominator == 0 ) return numerator == 0 ? 0 : nonfinite;
+        return numerator / denominator;
+    }
+
+    using ChainSamples = std::vector<std::map<SampleKey, LeafSample>>;
+
+    // A box adds homogeneous boundary conditions on its sides.  A perturbation
+    // alters the samples first (the nonfinite regression).
+    ChainOutcome chainOutcome( const std::string& prefix,
+                               const std::vector<ChainSpace>& chain,
+                               const std::optional<std::array<double, 2>>& box = std::nullopt,
+                               const std::function<void( ChainSamples& )>& perturb = {} )
+    {
+        ChainOutcome out;
+        const size_t n = chain.size();
+        ChainSamples samples;
+        for( const ChainSpace& c : chain ) samples.push_back( sampleLeaves( *c.ss, c.d ) );
+        if( perturb ) perturb( samples );
+        std::map<SampleKey, size_t> index;
+        for( const auto& [key, s] : samples.front() ) index.emplace( key, index.size() );
+        for( size_t k = 1; k < n; k++ )
+        {
+            bool same = samples.at( k ).size() == index.size();
+            for( const auto& [key, s] : samples.at( k ) ) same = same and index.contains( key );
+            if( not same ) out.problems.push_back( prefix + chain.at( k ).name + " is sampled at other points" );
+        }
+        if( not out.problems.empty() ) return out;
+
+        // Sparse samples.  A Gram matrix is positive definite iff its samples
+        // are injective; it fits d V_k in V_k+1 by normal equations.
+        std::vector<Eigen::SparseMatrix<double>> values( n ), images( n );
+        std::vector<Eigen::LDLT<Eigen::MatrixXd>> grams;
+        for( size_t k = 0; k < n; k++ )
+        {
+            const size_t nc = chain.at( k ).ss->numVectorComponents();
+            const size_t nf = chain.at( k ).ss->numFunctions();
+            const size_t nc_next = k + 1 < n ? chain.at( k + 1 ).ss->numVectorComponents() : 0;
+            out.dims.push_back( nf );
+            std::vector<Eigen::Triplet<double>> v, im;
+            for( const auto& [key, s] : samples.at( k ) )
+            {
+                const size_t row = index.at( key );
+                if( chain.at( k ).d != Derivative::None and size_t( s.derivatives.cols() ) != nc_next )
+                    throw std::runtime_error( prefix + chain.at( k ).name + ": the image has the wrong components" );
+                for( size_t j = 0; j < s.conn.size(); j++ )
+                {
+                    const int f = static_cast<int>( s.conn.at( j ).id() );
+                    for( size_t c = 0; c < nc; c++ ) v.emplace_back( int( row * nc + c ), f, s.values( j, c ) );
+                    for( size_t c = 0; c < nc_next and chain.at( k ).d != Derivative::None; c++ )
+                        im.emplace_back( int( row * nc_next + c ), f, s.derivatives( j, c ) );
+                }
+            }
+            values.at( k ).resize( int( index.size() * nc ), int( nf ) );
+            values.at( k ).setFromTriplets( v.begin(), v.end() );
+            images.at( k ).resize( int( index.size() * nc_next ), int( nf ) );
+            images.at( k ).setFromTriplets( im.begin(), im.end() );
+            const Eigen::MatrixXd gram = Eigen::MatrixXd( values.at( k ).transpose() * values.at( k ) );
+            double ratio = nonfinite;
+            if( gram.allFinite() )
+            {
+                const Eigen::VectorXd ev =
+                    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd>( gram, Eigen::EigenvaluesOnly ).eigenvalues();
+                ratio = std::sqrt( maxOrNaN( ev( 0 ), 0.0 ) / ev( ev.size() - 1 ) );
+            }
+            out.independence = minOrNaN( out.independence, ratio );
+            grams.emplace_back( gram );
+        }
+
+        // Rank relative to the largest singular value; an empty or zero
+        // spectrum has rank zero.  A nonfinite matrix is not decomposed: both
+        // edges become NaN.  A null space, if asked for, is orthonormal (NaN if
+        // the matrix is nonfinite).
+        const auto countRank = [&]( const Eigen::MatrixXd& m, Eigen::MatrixXd* null_space = nullptr ) {
+            size_t rank = 0;
+            if( not m.allFinite() )
+            {
+                out.kernel_edge = out.image_edge = nonfinite;
+                if( null_space ) *null_space = Eigen::MatrixXd::Constant( m.cols(), m.cols(), nonfinite );
+                return rank;
+            }
+            const Eigen::BDCSVD<Eigen::MatrixXd> svd( m, null_space ? unsigned( Eigen::ComputeFullV ) : 0u );
+            const Eigen::VectorXd& sv = svd.singularValues();
+            if( sv.size() > 0 and sv( 0 ) != 0 )
+                for( Eigen::Index i = 0; i < sv.size(); i++ )
+                {
+                    const double rel = sv( i ) / sv( 0 );
+                    if( rel > rank_tol )
+                    {
+                        rank++;
+                        out.image_edge = minOrNaN( out.image_edge, rel );
+                    }
+                    else
+                        out.kernel_edge = maxOrNaN( out.kernel_edge, rel );
+                }
+            if( null_space ) *null_space = svd.matrixV().rightCols( m.cols() - Eigen::Index( rank ) );
+            return rank;
+        };
+        std::vector<Eigen::MatrixXd> diffs;
+        for( size_t k = 0; k + 1 < n; k++ )
+        {
+            const Eigen::MatrixXd D =
+                grams.at( k + 1 ).solve( Eigen::MatrixXd( values.at( k + 1 ).transpose() * images.at( k ) ) );
+            const Eigen::MatrixXd image = Eigen::MatrixXd( images.at( k ) );
+            const double scale = maxOrNaN( maxAbsOrNaN( image ), 1.0 );
+            out.inclusion = maxOrNaN( out.inclusion, maxAbsOrNaN( values.at( k + 1 ) * D - image ) / scale );
+            out.ranks.push_back( countRank( D ) );
+            diffs.push_back( D );
+        }
+        out.ranks.push_back( 0 );
+        for( size_t k = 0; k + 1 < diffs.size(); k++ )
+            out.composition = maxOrNaN( out.composition, compositionResidual( diffs.at( k + 1 ), diffs.at( k ) ) );
+        for( size_t k = 0; k < n; k++ )
+            out.betti.push_back( long( out.dims.at( k ) ) - long( out.ranks.at( k ) ) -
+                                 ( k > 0 ? long( out.ranks.at( k - 1 ) ) : 0 ) );
+        if( not box ) return out;
+
+        // Zero-trace subspaces: orthonormal null spaces of the trace samples.
+        std::vector<Eigen::MatrixXd> traces, zero_traces;
+        for( size_t k = 0; k < n; k++ )
+        {
+            traces.push_back( boundaryTraces( *chain.at( k ).ss, chain.at( k ).trace, box->at( 0 ), box->at( 1 ) ) );
+            const Eigen::Index nf = Eigen::Index( out.dims.at( k ) );
+            if( traces.back().rows() == 0 )
+                zero_traces.push_back( Eigen::MatrixXd::Identity( nf, nf ) );
+            else
+            {
+                Eigen::MatrixXd z;
+                countRank( traces.back(), &z );
+                zero_traces.push_back( z );
+            }
+            out.bc_dims.push_back( size_t( zero_traces.back().cols() ) );
+        }
+        for( size_t k = 0; k + 1 < n; k++ )
+        {
+            const Eigen::MatrixXd dz = diffs.at( k ) * zero_traces.at( k );
+            const Eigen::MatrixXd image = images.at( k ) * zero_traces.at( k );
+            if( traces.at( k + 1 ).rows() > 0 and dz.cols() > 0 )
+                out.bc_inclusion = maxOrNaN( out.bc_inclusion,
+                                             maxAbsOrNaN( traces.at( k + 1 ) * dz ) /
+                                                 maxOrNaN( maxAbsOrNaN( image ), 1.0 ) );
+            out.bc_ranks.push_back( countRank( dz ) );
+        }
+        out.bc_ranks.push_back( 0 );
+        for( size_t k = 0; k < n; k++ )
+            out.bc_betti.push_back( long( out.bc_dims.at( k ) ) - long( out.bc_ranks.at( k ) ) -
+                                    ( k > 0 ? long( out.bc_ranks.at( k - 1 ) ) : 0 ) );
+        return out;
+    }
+
+    // One chain in 3D, two in 2D.  The vector spaces come from glued_h1; h1
+    // starts each chain.  A box adds homogeneous boundary conditions; a
+    // perturbation goes to chainOutcome.
+    std::vector<std::pair<std::string, ChainOutcome>>
+        complexOutcomes( const std::string& name,
+                         const HierarchicalMultiPatchSplineSpace& glued_h1,
+                         const HierarchicalMultiPatchSplineSpace& h1,
+                         const std::optional<std::array<double, 2>>& box = std::nullopt,
+                         const std::function<void( ChainSamples& )>& perturb = {} )
+    {
+        const size_t dim = h1.basisComplex().parametricAtlas().cmap().dim();
+        const VectorConformingHierarchicalMultiPatchSplineSpace hcurl =
+            buildHCurlHierarchicalMultiPatchSplineSpace( glued_h1 );
+        const VectorConformingHierarchicalMultiPatchSplineSpace hdiv =
+            buildHDivHierarchicalMultiPatchSplineSpace( glued_h1 );
+        const HierarchicalMultiPatchSplineSpace l2 = buildL2HierarchicalMultiPatchSplineSpace( hdiv );
+        std::vector<std::pair<std::string, std::vector<ChainSpace>>> chains;
+        if( dim == 2 )
+            chains = { { "grad, rot",
+                         { { "H1", &h1, Derivative::Grad, Trace::Value },
+                           { "H(curl)", &hcurl, Derivative::Rot, Trace::Tangential },
+                           { "L2", &l2, Derivative::None, Trace::None } } },
+                       { "curl, div",
+                         { { "H1", &h1, Derivative::Curl, Trace::Value },
+                           { "H(div)", &hdiv, Derivative::Div, Trace::Normal },
+                           { "L2", &l2, Derivative::None, Trace::None } } } };
+        else
+            chains = { { "grad, curl, div",
+                         { { "H1", &h1, Derivative::Grad, Trace::Value },
+                           { "H(curl)", &hcurl, Derivative::Curl, Trace::Tangential },
+                           { "H(div)", &hdiv, Derivative::Div, Trace::Normal },
+                           { "L2", &l2, Derivative::None, Trace::None } } } };
+        std::vector<std::pair<std::string, ChainOutcome>> out;
+        for( const auto& [chain_name, chain] : chains )
+            out.emplace_back( chain_name, chainOutcome( name + ", " + chain_name + ": ", chain, box, perturb ) );
+        return out;
+    }
+
+    std::vector<std::pair<std::string, ChainOutcome>> complexOutcomes( const PlacedLayout& layout )
+    {
+        const LayoutHierarchy hierarchy = placedHierarchy( layout, placedLeaves( layout ) );
+        const HierarchicalMultiPatchSplineSpace h1 = buildHierarchicalSplineSpace( hierarchy.levels, hierarchy.leaves );
+        return complexOutcomes( layout.name, h1, h1 );
+    }
+
+    // H1 from the same patches and leaves with no interfaces starts each chain.
+    std::vector<std::pair<std::string, ChainOutcome>> ungluedH1Outcomes( const PlacedLayout& layout )
+    {
+        const LayoutHierarchy hierarchy = placedHierarchy( layout, placedLeaves( layout ) );
+        const HierarchicalMultiPatchSplineSpace h1 = buildHierarchicalSplineSpace( hierarchy.levels, hierarchy.leaves );
+        PlacedLayout apart = layout;
+        apart.connections.clear();
+        const LayoutHierarchy apart_hierarchy = placedHierarchy( apart, placedLeaves( apart ) );
+        const HierarchicalMultiPatchSplineSpace unglued =
+            buildHierarchicalSplineSpace( apart_hierarchy.levels, apart_hierarchy.leaves );
+        return complexOutcomes( layout.name, h1, unglued );
+    }
+
+    // Glues every pair of patches whose shifts differ by one along an axis.
+    void glueTouching( PlacedLayout& layout )
+    {
+        const size_t dim = layout.patches.front().rotation.size();
+        const auto facing = [&]( const size_t p, const size_t g, const int sign ) {
+            for( size_t s = 0; s < 2 * dim; s++ )
+                if( placedNormal( layout.patches.at( p ).rotation, s ) == std::pair<size_t, int>{ g, sign } ) return s;
+            throw std::runtime_error( "no side faces that way" );
+        };
+        for( size_t a = 0; a < layout.patches.size(); a++ )
+            for( size_t b = a + 1; b < layout.patches.size(); b++ )
+                for( size_t g = 0; g < dim; g++ )
+                {
+                    const Eigen::VectorXd step = layout.patches.at( b ).shift - layout.patches.at( a ).shift;
+                    const Eigen::VectorXd e = Eigen::VectorXd::Unit( dim, g );
+                    if( ( step - e ).norm() < geom_tol ) glue( layout, a, facing( a, g, 1 ), b, facing( b, g, -1 ) );
+                    if( ( step + e ).norm() < geom_tol ) glue( layout, a, facing( a, g, -1 ), b, facing( b, g, 1 ) );
+                }
+    }
+
+    // Eight unit cubes around a hole: an annulus in 2D, a solid torus in 3D.
+    // Refined, patch 0 refines the elements facing patch 1.
+    PlacedLayout ringLayout( const size_t dim, const bool refined )
+    {
+        PlacedLayout layout;
+        layout.name = std::to_string( dim ) + "D ring of eight" + ( refined ? ", refined" : ", unrefined" );
+        Rotation identity( dim, std::vector<int>( dim, 0 ) );
+        for( size_t k = 0; k < dim; k++ ) identity.at( k ).at( k ) = 1;
+        const std::vector<std::pair<int, int>> cells = { { 0, 0 }, { 1, 0 }, { 2, 0 }, { 2, 1 },
+                                                         { 2, 2 }, { 1, 2 }, { 0, 2 }, { 0, 1 } };
+        for( const auto& [x, y] : cells )
+        {
+            Eigen::VectorXd shift = Eigen::VectorXd::Zero( dim );
+            shift( 0 ) = x;
+            shift( 1 ) = y;
+            layout.patches.push_back( { identity, shift } );
+        }
+        glueTouching( layout );
+        layout.refined_axes = { 0, 1 };
+        if( refined )
+            for( size_t e = 0; e < ( size_t( 1 ) << ( dim - 1 ) ); e++ )
+            {
+                std::vector<size_t> element{ 1 };
+                for( size_t k = 0; k + 1 < dim; k++ ) element.push_back( ( e >> k ) & 1 );
+                layout.refined.push_back( { 0, element } );
+            }
+        return layout;
+    }
+
+    PlacedLayout unrefined( PlacedLayout layout )
+    {
+        layout.name += ", unrefined";
+        layout.refined.clear();
+        return layout;
+    }
+
+    // Every 2D two-patch layout, the first 3D layout of each class, the cycles.
+    std::vector<PlacedLayout> contractibleLayouts()
+    {
+        std::vector<PlacedLayout> out = twoPatchPlacedLayouts( 2 );
+        std::set<std::string> classes;
+        for( const PlacedLayout& layout : twoPatchPlacedLayouts( 3 ) )
+            if( classes.insert( layout.orientation ).second ) out.push_back( layout );
+        for( const CycleFixture& fixture : cycleFixtures() ) out.push_back( cycleLayout( fixture ) );
+        return out;
+    }
+
+    // Shepherd and Toshniwal, Fig. 7(b) (ledger, step 9): one biquadratic
+    // patch of 7 x 7 elements on [0,7]^2; refined, the elements in [1,4]^2 and
+    // [3,6]^2 are bisected.
+    HierarchicalMultiPatchSplineSpace twoSquaresH1( const bool refined )
+    {
+        const double ptol = 1e-10;
+        std::vector<std::shared_ptr<const MultiPatchSplineSpace>> levels;
+        for( size_t level = 0; level < 2; level++ )
+        {
+            std::vector<double> knots{ 0, 0 };
+            for( size_t i = 0; i <= ( size_t( 7 ) << level ); i++ )
+                knots.push_back( double( i ) / double( size_t( 1 ) << level ) );
+            knots.insert( knots.end(), { 7, 7 } );
+            const KnotVector kv( knots, ptol );
+            levels.push_back( std::make_shared<const MultiPatchSplineSpace>(
+                buildH1MultiPatchSplineSpace( { makePatch( { kv, kv }, { 2, 2 } ) }, {} ) ) );
+        }
+        const auto inSquare = []( const size_t s, const size_t t, const size_t corner ) {
+            return corner <= s and s < corner + 3 and corner <= t and t < corner + 3;
+        };
+        std::vector<std::vector<Cell>> leaves( 2 );
+        for( size_t s = 0; s < 7; s++ )
+            for( size_t t = 0; t < 7; t++ )
+            {
+                if( refined and ( inSquare( s, t, 1 ) or inSquare( s, t, 3 ) ) )
+                {
+                    for( size_t i = 0; i < 4; i++ )
+                        leaves.at( 1 ).push_back(
+                            patchTopCellAt( levelCMap( *levels.at( 1 ) ), 0, { 2 * s + i % 2, 2 * t + i / 2 } ) );
+                }
+                else
+                    leaves.at( 0 ).push_back( patchTopCellAt( levelCMap( *levels.at( 0 ) ), 0, { s, t } ) );
+            }
+        return buildHierarchicalSplineSpace( levels, leaves );
+    }
+
+    // Tolerances sit far from the measured worst cases (outstanding_issues.txt,
+    // step 9); a NaN or an infinity fails each one.  Betti numbers are reported
+    // per degree; a nonempty bc_betti also checks the zero-trace chain.
+    std::vector<std::string> complexProblems( const std::string& where,
+                                              const ChainOutcome& o,
+                                              const std::vector<long>& betti,
+                                              const std::vector<long>& bc_betti = {} )
+    {
+        if( not o.problems.empty() ) return o.problems;
+        const auto below = []( const double x, const double tol ) { return std::isfinite( x ) and x < tol; };
+        const auto above = []( const double x, const double tol ) { return std::isfinite( x ) and x > tol; };
+        std::vector<std::string> out;
+        if( not below( o.inclusion, 1e-12 ) ) out.push_back( where + "d V_k is not in V_k+1" );
+        if( not below( o.composition, 1e-12 ) ) out.push_back( where + "d_k+1 d_k is not zero" );
+        if( not above( o.independence, 1e-3 ) ) out.push_back( where + "a basis is not linearly independent" );
+        if( not( below( o.kernel_edge, 1e-12 ) and above( o.image_edge, 1e-3 ) ) )
+            out.push_back( where + "a rank is not clear-cut" );
+        const auto perDegree = [&]( const std::string& label,
+                                    const std::vector<long>& got,
+                                    const std::vector<long>& expected ) {
+            if( got.size() != expected.size() )
+                out.push_back( where + label + std::to_string( got.size() ) + " Betti numbers, expected " +
+                               std::to_string( expected.size() ) );
+            for( size_t k = 0; k < std::min( got.size(), expected.size() ); k++ )
+                if( got.at( k ) != expected.at( k ) )
+                    out.push_back( where + label + "b_" + std::to_string( k ) + " = " + std::to_string( got.at( k ) ) +
+                                   ", expected " + std::to_string( expected.at( k ) ) );
+        };
+        perDegree( "", o.betti, betti );
+        if( bc_betti.empty() ) return out;
+        if( not below( o.bc_inclusion, 1e-12 ) ) out.push_back( where + "d of a zero-trace function has a trace" );
+        perDegree( "zero traces, ", o.bc_betti, bc_betti );
+        return out;
+    }
+
+    // Expects 1 in degree 0, loops in degree 1, zero above.  A throw is
+    // reported per layout.
+    std::vector<std::string> complexGate( const std::vector<PlacedLayout>& layouts, const size_t loops, size_t& chains )
+    {
+        std::vector<std::string> out;
+        for( const PlacedLayout& layout : layouts )
+        {
+            std::vector<long> betti( layout.patches.front().rotation.size() + 1, 0 );
+            betti.at( 0 ) = 1;
+            betti.at( 1 ) = long( loops );
+            try
+            {
+                for( const auto& [name, o] : complexOutcomes( layout ) )
+                {
+                    const std::vector<std::string> p = complexProblems( layout.name + ", " + name + ": ", o, betti );
+                    out.insert( out.end(), p.begin(), p.end() );
+                    chains++;
+                }
+            }
+            catch( const std::exception& e )
+            {
+                out.push_back( layout.name + ": " + e.what() );
+            }
+        }
+        return out;
+    }
+}
+
+TEST_CASE( "Discrete complex on contractible layouts without refinement: inclusions, composition and exactness",
+           "[shared_interface_refinement]" )
+{
+    std::vector<PlacedLayout> layouts;
+    for( const PlacedLayout& layout : contractibleLayouts() ) layouts.push_back( unrefined( layout ) );
+    CHECK( layouts.size() == 16 + 10 + 5 );
+    size_t chains = 0;
+    const std::vector<std::string> problems = complexGate( layouts, 0, chains );
+    CHECK( chains == 2 * 16 + 10 + 2 * 2 + 3 );
+    INFO( joined( problems ) );
+    CHECK( problems.empty() );
+}
+
+TEST_CASE( "Discrete complex on contractible layouts under asymmetric leaves: inclusions, composition and exactness",
+           "[shared_interface_refinement]" )
+{
+    const std::vector<PlacedLayout> layouts = contractibleLayouts();
+    CHECK( layouts.size() == 16 + 10 + 5 );
+    size_t chains = 0;
+    const std::vector<std::string> problems = complexGate( layouts, 0, chains );
+    CHECK( chains == 2 * 16 + 10 + 2 * 2 + 3 );
+    INFO( joined( problems ) );
+    CHECK( problems.empty() );
+}
+
+TEST_CASE( "Discrete complex on a ring of eight patches: one loop, with and without refinement",
+           "[shared_interface_refinement]" )
+{
+    const std::vector<PlacedLayout> layouts = {
+        ringLayout( 2, false ), ringLayout( 2, true ), ringLayout( 3, false ), ringLayout( 3, true ) };
+    for( const PlacedLayout& layout : layouts ) CHECK( layout.connections.size() == 2 * 8 );
+    size_t chains = 0;
+    const std::vector<std::string> problems = complexGate( layouts, 1, chains );
+    CHECK( chains == 2 * 2 + 2 );
+    INFO( joined( problems ) );
+    CHECK( problems.empty() );
+}
+
+TEST_CASE( "Discrete complex: the inclusion check sees an unglued interface", "[shared_interface_refinement]" )
+{
+    // Grad (2D: also curl) of H1 built without interfaces leaves the glued
+    // space at the interfaces.
+    const std::vector<PlacedLayout> two_d = twoPatchPlacedLayouts( 2 );
+    const std::vector<PlacedLayout> three_d = twoPatchPlacedLayouts( 3 );
+    std::vector<PlacedLayout> layouts = {
+        unrefined( two_d.front() ), two_d.back(), unrefined( three_d.front() ), three_d.back() };
+    for( const CycleFixture& fixture : cycleFixtures() ) layouts.push_back( cycleLayout( fixture ) );
+    std::vector<std::string> problems;
+    size_t chains = 0;
+    for( const PlacedLayout& layout : layouts )
+    {
+        try
+        {
+            for( const auto& [name, o] : ungluedH1Outcomes( layout ) )
+            {
+                const std::string where = layout.name + ", " + name + ": ";
+                problems.insert( problems.end(), o.problems.begin(), o.problems.end() );
+                if( not( std::isfinite( o.inclusion ) and o.inclusion > 0.1 ) )
+                    problems.push_back( where + "the unglued gradients fit" );
+                chains++;
+            }
+        }
+        catch( const std::exception& e )
+        {
+            problems.push_back( layout.name + ": " + e.what() );
+        }
+    }
+    CHECK( chains == 2 + 2 + 1 + 1 + 2 * 2 + 3 );
+    INFO( joined( problems ) );
+    CHECK( problems.empty() );
+}
+
+TEST_CASE( "Discrete complex on a published non-exact hierarchy: Betti numbers per degree",
+           "[shared_interface_refinement]" )
+{
+    // Shepherd and Toshniwal, Fig. 7(b) (ledger, step 9).  With homogeneous
+    // boundary conditions exact is 0 0 1, and the refinement adds one harmonic
+    // 1-form.  Without them the ledger's trace sequence gives 1 1 0.
+    // Dimensions are counted by hand from the selection rule.
+    struct Expected
+    {
+        bool refined;
+        std::vector<size_t> dims, bc_dims;
+        std::vector<long> betti, bc_betti;
+    };
+    const std::vector<Expected> fixtures = { { false, { 81, 144, 64 }, { 49, 112, 64 }, { 1, 0, 0 }, { 0, 0, 1 } },
+                                             { true, { 111, 216, 105 }, { 79, 184, 105 }, { 1, 1, 0 }, { 0, 1, 1 } } };
+    std::vector<std::string> problems;
+    std::vector<long> harmonic_one_forms; // refined, zero traces, per chain
+    size_t chains = 0;
+    for( const Expected& e : fixtures )
+    {
+        const std::string name = e.refined ? "two squares" : "two squares, unrefined";
+        try
+        {
+            const HierarchicalMultiPatchSplineSpace h1 = twoSquaresH1( e.refined );
+            if( topCells( h1.basisComplex().parametricAtlas().cmap() ).size() != ( e.refined ? 32 + 4 * 17 : 49 ) )
+                problems.push_back( name + ": leaf count" );
+            for( const auto& [chain_name, o] : complexOutcomes( name, h1, h1, std::array<double, 2>{ 0, 7 } ) )
+            {
+                const std::string where = name + ", " + chain_name + ": ";
+                const std::vector<std::string> p = complexProblems( where, o, e.betti, e.bc_betti );
+                problems.insert( problems.end(), p.begin(), p.end() );
+                if( o.dims != e.dims or o.bc_dims != e.bc_dims ) problems.push_back( where + "dimensions" );
+                if( e.refined )
+                {
+                    // The contractible expectation fails in degree 1 alone.
+                    const std::vector<std::string> exact = complexProblems( where, o, { 1, 0, 0 }, { 0, 0, 1 } );
+                    if( exact != std::vector<std::string>{ where + "b_1 = 1, expected 0",
+                                                           where + "zero traces, b_1 = 1, expected 0" } )
+                        problems.push_back( where + "the contractible expectation fails elsewhere: " +
+                                            joined( exact ) );
+                    if( o.bc_betti.size() == 3 ) harmonic_one_forms.push_back( o.bc_betti.at( 1 ) );
+                }
+                chains++;
+            }
+        }
+        catch( const std::exception& ex )
+        {
+            problems.push_back( name + ": " + ex.what() );
+        }
+    }
+    CHECK( chains == 2 * 2 );
+    CHECK( harmonic_one_forms == std::vector<long>{ 1, 1 } );
+    INFO( joined( problems ) );
+    CHECK( problems.empty() );
+}
+
+TEST_CASE( "Discrete complex: a zero differential has composition residual zero", "[shared_interface_refinement]" )
+{
+    // Direct, on 2 x 2 matrices.  The nonzero ratio and the infinity are
+    // controls: zero over zero must not make every residual zero, nor hide a
+    // nonfinite entry.
+    const Eigen::MatrixXd zero = Eigen::MatrixXd::Zero( 2, 2 );
+    const Eigen::MatrixXd d{ { 1, 2 }, { 3, 4 } };
+    Eigen::MatrixXd infinite = zero;
+    infinite( 1, 0 ) = std::numeric_limits<double>::infinity();
+    CHECK( compositionResidual( d, zero ) == 0 );
+    CHECK( compositionResidual( zero, d ) == 0 );
+    CHECK( compositionResidual( zero, zero ) == 0 );
+    CHECK( compositionResidual( d, d ) == 22.0 / 16.0 );
+    CHECK( std::isnan( compositionResidual( zero, infinite ) ) );
+}
+
+TEST_CASE( "Discrete complex: a nonfinite sample reaches the problem report", "[shared_interface_refinement]" )
+{
+    // The published case, unrefined (one biquadratic patch of 7 x 7 elements
+    // on [0,7]^2), with one sample set nonfinite in each chain.  A NaN in an
+    // H1 derivative reaches d_0 and, through it, the zero-trace inclusion; an
+    // infinity in an L2 value reaches the L2 Gram matrix and d_1.  One problem
+    // reports both rank edges, so each edge is also checked.
+    struct Fixture
+    {
+        std::string name;
+        std::function<void( ChainSamples& )> perturb;
+        std::vector<std::string> metrics; // problems expected, in report order
+    };
+    const std::vector<Fixture> fixtures = {
+        { "control", {}, {} },
+        { "NaN in an H1 derivative",
+          []( ChainSamples& s ) {
+              s.front().begin()->second.derivatives( 0, 0 ) = std::numeric_limits<double>::quiet_NaN();
+          },
+          { "d V_k is not in V_k+1",
+            "d_k+1 d_k is not zero",
+            "a rank is not clear-cut",
+            "d of a zero-trace function has a trace" } },
+        { "infinity in an L2 value",
+          []( ChainSamples& s ) { s.back().begin()->second.values( 0, 0 ) = std::numeric_limits<double>::infinity(); },
+          { "d V_k is not in V_k+1",
+            "d_k+1 d_k is not zero",
+            "a basis is not linearly independent",
+            "a rank is not clear-cut" } } };
+    const std::vector<std::string> all_metrics = { "d V_k is not in V_k+1",
+                                                   "d_k+1 d_k is not zero",
+                                                   "a basis is not linearly independent",
+                                                   "a rank is not clear-cut",
+                                                   "d of a zero-trace function has a trace" };
+    std::vector<std::string> problems;
+    size_t chains = 0;
+    for( const Fixture& f : fixtures )
+    {
+        try
+        {
+            const HierarchicalMultiPatchSplineSpace h1 = twoSquaresH1( false );
+            for( const auto& [chain_name, o] :
+                 complexOutcomes( f.name, h1, h1, std::array<double, 2>{ 0, 7 }, f.perturb ) )
+            {
+                const std::string where = f.name + ", " + chain_name + ": ";
+                const std::vector<std::string> p = complexProblems( where, o, { 1, 0, 0 }, { 0, 0, 1 } );
+                if( f.metrics.empty() and not p.empty() ) problems.push_back( where + "unperturbed: " + joined( p ) );
+                if( not f.metrics.empty() )
+                {
+                    std::vector<std::string> got;
+                    for( const std::string& m : all_metrics )
+                        if( std::find( p.begin(), p.end(), where + m ) != p.end() ) got.push_back( m );
+                    if( got != f.metrics )
+                        problems.push_back( where + "metric problems: " + joined( got ) + "; expected " +
+                                            joined( f.metrics ) );
+                    if( std::isfinite( o.kernel_edge ) ) problems.push_back( where + "the kernel edge is finite" );
+                    if( std::isfinite( o.image_edge ) ) problems.push_back( where + "the image edge is finite" );
+                }
+                chains++;
+            }
+        }
+        catch( const std::exception& e )
+        {
+            problems.push_back( f.name + ": " + e.what() );
+        }
+    }
+    CHECK( chains == 3 * 2 );
     INFO( joined( problems ) );
     CHECK( problems.empty() );
 }
