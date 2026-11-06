@@ -648,6 +648,54 @@ PYBIND11_MODULE( splines, m )
               "control_points"_a,
               "elems_to_refine"_a )
         .def(
+            "activeLeafElementInfo",
+            []( const api::NavierStokesHierarchicalDiscretization& nsd ) {
+                const topology::HierarchicalTPCombinatorialMap& cmap =
+                    nsd.H1_ss.basisComplex().parametricAtlas().cmap();
+                py::list out;
+                iterateCellsWhile( cmap, cmap.dim(), [&]( const topology::Cell& cell ) {
+                    const auto [level, level_dart] = cmap.unrefinedAncestorDartOfCell( cell );
+                    const topology::FullyUnflattenedDart unflat = topology::unflattenFull(
+                        *cmap.refinementLevels().at( level ), level_dart );
+                    py::dict info;
+                    info["dart"] = cell.dart().id();
+                    info["level"] = level;
+                    info["indices"] = py::make_tuple(
+                        unflat.unflat_darts.at( 0 ).id(),
+                        unflat.unflat_darts.at( 1 ).id() );
+                    out.append( info );
+                    return true;
+                } );
+                return out;
+            },
+            "Return the dart id, hierarchy level, and level-local tensor indices for every active leaf element." )
+        .def(
+            "l2LevelSupports",
+            []( const api::NavierStokesHierarchicalDiscretization& nsd, const size_t level ) {
+                if( level >= nsd.L2_ss.refinementLevels().size() )
+                    throw std::out_of_range( "Requested L2 support level is outside the hierarchy." );
+
+                const basis::TPSplineSpace& level_space =
+                    *nsd.L2_ss.refinementLevels().at( level );
+                const topology::TPCombinatorialMap& level_cmap =
+                    level_space.basisComplex().parametricAtlas().cmap();
+                std::map<size_t, std::vector<std::pair<size_t, size_t>>> supports;
+
+                iterateCellsWhile( level_cmap, level_cmap.dim(), [&]( const topology::Cell& cell ) {
+                    const topology::FullyUnflattenedDart unflat =
+                        topology::unflattenFull( level_cmap, cell.dart() );
+                    const std::pair<size_t, size_t> indices(
+                        unflat.unflat_darts.at( 0 ).id(),
+                        unflat.unflat_darts.at( 1 ).id() );
+                    for( const basis::FunctionId& fid : level_space.connectivity( cell ) )
+                        supports[static_cast<size_t>( fid.id() )].push_back( indices );
+                    return true;
+                } );
+                return supports;
+            },
+            "level"_a,
+            "Return tensor-cell supports of all L2 functions on one refinement level." )
+        .def(
             "hierarchicalRefinementDiagnostics",
             []( const api::NavierStokesHierarchicalDiscretization& nsd ) {
                 const auto scalar_summary = []( const basis::HierarchicalTPSplineSpace& space ) {
