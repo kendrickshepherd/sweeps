@@ -490,8 +490,10 @@ Current position:
     AMR. The documentation and suite are done, and the plan was vetted on
     2026-11-05 (outstanding_issues.txt, item 1, STEP 10): the adaptive
     loop stays in StokesFlow, a separate repository; this library stays
-    policy-free and adds an opt-in per-patch n-form support check. Next
-    is 10.4, the two single-patch queries StokesFlow needs.
+    policy-free and adds an opt-in per-patch n-form support check. The
+    two single-patch queries StokesFlow needs (10.4) are now C++
+    functions with tests; their Python bindings come next, after the
+    merge of origin/master.
   - The volume Piola gate is complete.
   - Phase 5B is the next implementation task.
 

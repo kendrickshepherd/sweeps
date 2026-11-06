@@ -123,4 +123,23 @@ namespace topology
     };
 
     std::vector<std::vector<Cell>> leafElements( const HierarchicalTPCombinatorialMap& cmap );
+
+    /// @brief A leaf element of a hierarchical cmap, located on its refinement level.
+    struct LeafElementInfo
+    {
+        Cell leaf;
+        size_t level;
+        /// Level-local tensor element indices, one per parametric direction: the 1d dart ids of the level cell.
+        SmallVector<size_t, 3> indices;
+    };
+
+    /// @brief The level and level-local tensor element indices of a leaf element.
+    /// The leaf field preserves the supplied cell handle.
+    /// Level and indices are independent of which dart of the leaf is supplied.
+    /// @param leaf  A top-dimensional cell given by any of its leaf darts.
+    /// @throws std::invalid_argument if leaf is not top-dimensional.
+    LeafElementInfo leafElementInfo( const HierarchicalTPCombinatorialMap& cmap, const Cell& leaf );
+
+    /// @brief leafElementInfo of every leaf element, in iterateCellsWhile order.
+    std::vector<LeafElementInfo> leafElementInfos( const HierarchicalTPCombinatorialMap& cmap );
 }; // namespace topology

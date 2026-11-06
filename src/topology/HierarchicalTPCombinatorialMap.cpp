@@ -592,4 +592,27 @@ namespace topology
         } );
         return out;
     }
+
+    LeafElementInfo leafElementInfo( const HierarchicalTPCombinatorialMap& cmap, const Cell& leaf )
+    {
+        if( leaf.dim() != cmap.dim() )
+            throw std::invalid_argument( "leafElementInfo requires a top-dimensional cell" );
+
+        const auto [level, level_dart] = cmap.unrefinedAncestorDartOfCell( leaf );
+        const FullyUnflattenedDart unflat = unflattenFull( *cmap.refinementLevels().at( level ), level_dart );
+
+        LeafElementInfo out{ leaf, level, {} };
+        for( const Dart& d : unflat.unflat_darts ) out.indices.push_back( d.id() );
+        return out;
+    }
+
+    std::vector<LeafElementInfo> leafElementInfos( const HierarchicalTPCombinatorialMap& cmap )
+    {
+        std::vector<LeafElementInfo> out;
+        iterateCellsWhile( cmap, cmap.dim(), [&]( const Cell& c ) {
+            out.push_back( leafElementInfo( cmap, c ) );
+            return true;
+        } );
+        return out;
+    }
 }

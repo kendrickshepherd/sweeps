@@ -2,6 +2,7 @@
 #include <BezierTransfer.hpp>
 #include <unsupported/Eigen/KroneckerProduct>
 #include <IndexOperations.hpp>
+#include <CombinatorialMapMethods.hpp>
 
 namespace basis
 {
@@ -129,6 +130,20 @@ namespace basis
         for( const auto& comp : component_comps ) out.push_back( comp->numFunctions() );
         return out;
     };
+
+    std::vector<std::vector<SmallVector<size_t, 3>>> tensorCellSupports( const TPSplineSpace& ss )
+    {
+        const topology::TPCombinatorialMap& cmap = ss.basisComplex().parametricAtlas().cmap();
+        std::vector<std::vector<SmallVector<size_t, 3>>> out( ss.numFunctions() );
+        iterateCellsWhile( cmap, cmap.dim(), [&]( const topology::Cell& c ) {
+            SmallVector<size_t, 3> indices;
+            for( const topology::Dart& d : topology::unflattenFull( cmap, c.dart() ).unflat_darts )
+                indices.push_back( d.id() );
+            for( const FunctionId& fid : ss.connectivity( c ) ) out.at( fid.id() ).push_back( indices );
+            return true;
+        } );
+        return out;
+    }
 
     TPSplineSpace buildBSpline( const SmallVector<KnotVector, 3>& kvs, const SmallVector<size_t, 3>& degrees )
     {

@@ -1011,8 +1011,9 @@ MEDIUM PRIORITY — Architectural / Correctness
     10. Documentation, full suite, then automatic AMR, with refinement
         admissibility as an explicit policy input (STEP 9 DECISION).
         [IN PROGRESS: docs and suite done; plan vetted 2026-11-05 (the
-        loop stays in StokesFlow, an opt-in n-form check here); next 10.4;
-        STEP 10 below]
+        loop stays in StokesFlow, an opt-in n-form check here); 10.4 first
+        half done 2026-11-05 (the two queries in C++, tested); next their
+        bindings, after the merge of origin/master; STEP 10 below]
    STEP 2 RESULT (2026-10-20).  Which exception each current rejection
    reaches, MEASURED by mutation probe: each of validateMatchingInterfaces'
    two throws in turn was changed to std::runtime_error, the three binaries
@@ -2732,6 +2733,7 @@ MEDIUM PRIORITY — Architectural / Correctness
                      corner-jump layout that edge grading admits.
              A bypass probe for each of (i)-(iii), named when written;
              restored byte-identical.  Where the code and tests live: Q11.
+             [FIRST HALF DONE 2026-11-05: STEP 10.4 below]
        10.5  Policy-free multipatch layer: a C++ hierarchical multipatch
              Navier-Stokes wrapper beside
              NavierStokesHierarchicalDiscretization (H1, H(div) and L2
@@ -2776,6 +2778,146 @@ MEDIUM PRIORITY — Architectural / Correctness
          (D5); multipatch Stokes interface terms (Phase 6), with an
          estimator jump term at patch interfaces; coarsening (D7);
          incompatible interfaces (D6).
+     STEP 10.4, FIRST HALF (2026-11-05).  The two single-patch queries as
+       native C++ in topology and basis, with Catch2 tests (Q11).  No
+       binding yet: SplinesAPI.cpp is not touched, so the merge of
+       origin/master (4351a03) should stay clean (ARGUED).
+     Code.
+       topology::leafElementInfo( cmap, leaf ) and leafElementInfos( cmap )
+         (HierarchicalTPCombinatorialMap): a leaf's level and its
+         level-local tensor element indices, one per direction, s first
+         (the 1d dart ids of the level cell).  Any dart of the leaf gives
+         the same level and indices.  The leaf field is the cell handle as
+         supplied, for joining the current iteration; (level, indices) is
+         the persistent single-patch identity.  A cell that is not
+         top-dimensional throws std::invalid_argument, tested directly
+         (iv).  A top-dimensional non-leaf reaches
+         unrefinedAncestorDartOfCell's std::runtime_error instead
+         (ARGUED-FROM-CODE; left separate).  leafElementInfos visits the
+         leaves in iterateCellsWhile order.
+       basis::tensorCellSupports( ss ) (TPSplineSpace): per function id of
+         ss, the top-dimensional cells of its support as tensor element
+         indices, s first.
+       ARGUED-FROM-CODE: the same calls as 4351a03's activeLeafElementInfo
+         and l2LevelSupports (unrefinedAncestorDartOfCell, then
+         unflattenFull on the level map; connectivity over the level
+         cells), in both supported tensor-product dimensions, 2D and 3D.
+         4351a03 returns a map from function id to cells; this returns a
+         vector indexed by function id.
+       Build change: test/CMakeLists.txt compiles src/api/NavierStokes-
+         Discretization.cpp into HierarchicalAmrQueries_test, since src/api
+         is otherwise built only into the pybind modules.
+     Tests, test/HierarchicalAmrQueries_test.cpp, tag [amr_queries].  Each
+       2D fixture runs in its own try, and its problems are reported
+       together.  2D fixtures go through
+       NavierStokesHierarchicalDiscretization at H1 degree p in {2, 3} in
+       both directions, open knots with simple interior knots, Greville
+       control points:
+         "jump 2 across a face": breaks {0,1,2} x {0,1}; (1,0) marked at
+           level 0, (2,0) and (2,1) at level 1.  Leaves L0 [0,1], L1
+           [1.5,2] and L2 [1,1.5] in s, each across t in [0,1].
+         "jump 2 at a corner only": breaks {0,...,4}^2; (1,1), (2,1) and
+           (1,2) marked at level 0, (3,3) at level 1.  Edge graded: the
+           level 2 leaves in [1.5,2]^2 meet the level 0 leaf [2,3]^2 only
+           at the point (2,2).
+       (i) Leaf records.  Oracle: the leaves from the marks, by integer
+         arithmetic (children 2i + {0,1}; a mark that is not a leaf
+         throws).  The multiset of (level, indices) from leafElementInfos
+         must equal it, and leafElementInfo from every dart of every leaf
+         must give that leaf's level and indices.  Non-vacuity: some leaf
+         must have a dart of another level.  In 3D, on a hierarchical
+         cmap built from 1d maps, with no spline space: 2 x 3 x 2 level 0
+         cells, (0,1,0) marked, then its child (1,3,0), chosen so the
+         leaves change under s <-> u (P2).
+       (ii) Supports.  Oracle: function k of degree q covers span e iff
+         knots_k <= z_e and z_(e+1) <= knots_(k+q+1) (tolerance 1e-12);
+         tensor products numbered k_s + n_s (k_t + n_t k_u), a convention
+         ARGUED-FROM-CODE (source_fid + n_source * line_fid).  The L2
+         level knots are taken as the H1 level knots less the first and
+         last, at q = p - 1.  Every L2 level space is checked, and it must
+         share the H1 hierarchical cmap and level cmaps (pointer
+         equality).  In 3D, on a plain TPSplineSpace: breaks {0,1,2,3},
+         {0,0.5,2} and {0,1} at degrees 2, 1 and 3.
+       (iii) Active L2 functions.  Oracle: a level l cell is in Omega^l iff
+         l = 0 or its parent was marked at l - 1, and in Omega^(l+1) iff
+         it was marked at l.  A function is expected active iff its (ii)
+         oracle support lies inside Omega^l and not inside Omega^(l+1).
+         Compared per level with L2_ss.activeFunctions(), extra and
+         missing ids named.
+       (iv) Refusal.  On the face-jump fixture at p = 2, the first leaf's
+         dart as a cell of dimension 0, 1 or 3 throws
+         std::invalid_argument, and as the 2-cell it does not.
+     Result, MEASURED.  All pass: 18 assertions in 6 cases.  Full build,
+       no warnings.  Full ctest: 252 of 253 pass (the 247 of 0d5f11e and
+       the 6 new cases); #30, macaroni vertex tracing, which does not call
+       the new code, was marked Timeout.  That run spanned two sleeps (lid
+       closed at 16:38; pmset log): 33 minutes of wall-clock time for 262 s
+       of test time.  Rerun alone, #30's binary reported all 64722
+       assertions passed, and ctest again marked Timeout across a 30
+       minute sleep (2192 s wall-clock, 396 s test time; the limit is
+       1500 s).  2026-11-06, build unchanged, lid open, no sleep in the
+       pmset log: #30 alone passed in 127 s.  Full run 252/253; the sole
+       sleep-induced timeout passed on an awake focused rerun.  Combined
+       evidence: all 253 tests pass.  Before the review fixes: 252/252
+       (132 s).
+     Bypass probes, MEASURED, on the test file before (iv) was added; per
+       the review, no probe targets the guard.  Each edits source,
+       rebuilds and runs the test, then restores byte-identical (cmp).
+       P1 (HierarchicalTPCombinatorialMap.cpp) leafElementInfo reads the
+          level and dart from dartRanges().toLocalDart( leaf.dart() )
+          instead of unrefinedAncestorDartOfCell.  (i) fails in all four
+          2D fixtures and in 3D, by the any-dart check alone: a dart on
+          an edge that a finer neighbour subdivides names a cell of that
+          finer level, e.g. on the face-jump fixture dart 53 of the L0
+          leaf (0; 0, 0) gives (2; 3, 0).  The multiset check passes, so
+          iterateCellsWhile hands out darts at the leaf's level on these
+          fixtures.  (ii) and (iii) pass.
+       P2 (both files) The indices are reversed.  (i) fails on the
+          face-jump fixture at both degrees and in 3D; the corner fixture
+          is symmetric under s <-> t and passes.  (ii) fails in all four
+          2D fixtures and in 3D (48 of 60 functions).  (iii) passes; it
+          does not read the queries.  Against the prediction, the first P2
+          run passed 3D (i): the level 1 mark was then (1,3,1), and that
+          fixture was symmetric under s <-> u.  The mark was moved to
+          (1,3,0), and P2 rerun.
+       P3 (HierarchicalTPSplineSpace.cpp) The file as it was before STEP 5
+          FIX (c8a5cad^; unchanged since c8a5cad).  (iii) fails on the
+          face-jump fixture at p = 3 only: level 1 L2 ids 3, 9, 15 and 21
+          are extra, the four t-functions with s support [0.5,2], which
+          reaches [0.5,1], outside Omega^1.  The pre-fix rule removes the
+          functions on a level 1 face neighbour of a level 1 leaf that a
+          coarser leaf covers; [0.5,1] is no such neighbour, since the
+          level 2 leaves lie between.  It passes the face-jump fixture at
+          p = 2 and the corner fixture at both degrees, as predicted.  (i)
+          and (ii) pass.
+     Limits.
+       - Open knot vectors with simple interior knots only.
+       - (iii) is L2 activity only, not H1 or H(div).
+       - One patch.
+       - The Navier-Stokes wrapper is 2D, so in 3D only the two functions
+         are reached: (i) on a hand-built hierarchical cmap, (ii) on a
+         plain TP space.
+       - On the L2 space, support containment and the pre-fix rule differ
+         only when a support crosses a face with a leaf-level jump of two
+         or more, which needs L2 degree >= 2, H1 p >= 3 (ARGUED; P3 agrees
+         on these fixtures).  Edge grading forbids face jumps of two, so on
+         edge-graded meshes the two rules should coincide (ARGUED; the
+         corner fixture under P3 is one measured case).  StokesFlow runs
+         at p = 3 (Inputfile.py).
+     REVIEW (2026-11-05).  Approved: the build change, for now (if 10.5
+       adds native tests that need src/api, factor it into a reusable
+       CMake target rather than repeat target_sources); std::invalid_-
+       argument for a cell that is not top-dimensional, with a direct test
+       (iv); the names LeafElementInfo, leafElementInfo(s) and
+       tensorCellSupports.  Corrected: the same level and indices from any
+       dart, not the same record; 2D and 3D, not any dimension.  Both
+       HierarchicalTPCombinatorialMap files now end in a newline; neither
+       did at HEAD.
+     Next, the second half, after the user merges origin/master: 4351a03's
+       two lambdas rewired to these functions with their Python shape kept
+       ("dart", "level" and a 2-tuple "indices"; a dict from function id
+       to a list of (i, j); out_of_range for a bad level), plus registered
+       Python smoke tests (numpy-aware SKIP_RETURN_CODE).
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces

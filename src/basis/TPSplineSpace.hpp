@@ -41,6 +41,10 @@ namespace basis
 
     util::IndexVec getTPLengths( const basis::TPSplineSpace& tpss );
 
+    /// @brief The top-dimensional cells in the support of each function of ss, as tensor element indices.
+    /// @return Indexed by the FunctionIds of ss; each cell is its 1d dart ids, s first, in iterateCellsWhile order.
+    std::vector<std::vector<SmallVector<size_t, 3>>> tensorCellSupports( const TPSplineSpace& ss );
+
     TPSplineSpace buildBSpline( const SmallVector<KnotVector, 3>& kvs, const SmallVector<size_t, 3>& degrees );
 
     Eigen::SparseMatrix<double> refinementOp( const TPSplineSpace& coarse, const TPSplineSpace& fine, const double param_tol );
