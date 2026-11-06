@@ -1,4 +1,4 @@
-# Binding smoke test for the AMR queries: availability, data shape and exception translation.
+# Binding smoke test for the AMR queries: availability, data shape, selected exact supports and exception translation.
 # Their correctness is tested in C++ (HierarchicalAmrQueries_test).
 import sys
 
@@ -82,11 +82,25 @@ for level, summary in enumerate(l2_levels):
     level_cells = {(i, j) for j in range(n_t * 2**level) for i in range(n_s * 2**level)}
     check(cells == level_cells, "l2LevelSupports(" + str(level) + "): supports do not cover the level's cells")
 
+# L2 has degree p - 1 = 1 on each level's open knots: function k covers cells k - 1 and k of its direction, and
+# fid = k_s + (cells_s + 1) k_t.  Chosen to change under (i, j) reversal and under a shift of the ids.
+exact_supports = {
+    (0, 1): {(0, 0), (1, 0)},
+    (0, 5): {(0, 0), (0, 1)},
+    (0, 19): {(3, 2)},
+    (1, 14): {(4, 0), (5, 0), (4, 1), (5, 1)},
+    (2, 62): {(10, 2), (11, 2), (10, 3), (11, 3)},
+}
+for (level, fid), expected in exact_supports.items():
+    actual = set(nsd.l2LevelSupports(level).get(fid, []))
+    check(actual == expected, "l2LevelSupports(" + str(level) + ")[" + str(fid) + "] is " + repr(sorted(actual)) +
+          ", not " + repr(sorted(expected)))
+
 try:
     nsd.l2LevelSupports(len(l2_levels))
     problems.append("l2LevelSupports past the last level did not raise")
-except IndexError:
-    pass
+except IndexError as e:
+    check(str(e) == "Requested L2 support level is outside the hierarchy.", "IndexError message: " + str(e))
 
 for problem in problems:
     print(problem)

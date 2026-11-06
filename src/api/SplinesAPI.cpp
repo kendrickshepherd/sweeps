@@ -650,22 +650,16 @@ PYBIND11_MODULE( splines, m )
         .def(
             "activeLeafElementInfo",
             []( const api::NavierStokesHierarchicalDiscretization& nsd ) {
-                const topology::HierarchicalTPCombinatorialMap& cmap =
-                    nsd.H1_ss.basisComplex().parametricAtlas().cmap();
                 py::list out;
-                iterateCellsWhile( cmap, cmap.dim(), [&]( const topology::Cell& cell ) {
-                    const auto [level, level_dart] = cmap.unrefinedAncestorDartOfCell( cell );
-                    const topology::FullyUnflattenedDart unflat = topology::unflattenFull(
-                        *cmap.refinementLevels().at( level ), level_dart );
+                for( const topology::LeafElementInfo& leaf :
+                     topology::leafElementInfos( nsd.H1_ss.basisComplex().parametricAtlas().cmap() ) )
+                {
                     py::dict info;
-                    info["dart"] = cell.dart().id();
-                    info["level"] = level;
-                    info["indices"] = py::make_tuple(
-                        unflat.unflat_darts.at( 0 ).id(),
-                        unflat.unflat_darts.at( 1 ).id() );
+                    info["dart"] = leaf.leaf.dart().id();
+                    info["level"] = leaf.level;
+                    info["indices"] = py::make_tuple( leaf.indices.at( 0 ), leaf.indices.at( 1 ) );
                     out.append( info );
-                    return true;
-                } );
+                }
                 return out;
             },
             "Return the dart id, hierarchy level, and level-local tensor indices for every active leaf element." )
@@ -675,22 +669,11 @@ PYBIND11_MODULE( splines, m )
                 if( level >= nsd.L2_ss.refinementLevels().size() )
                     throw std::out_of_range( "Requested L2 support level is outside the hierarchy." );
 
-                const basis::TPSplineSpace& level_space =
-                    *nsd.L2_ss.refinementLevels().at( level );
-                const topology::TPCombinatorialMap& level_cmap =
-                    level_space.basisComplex().parametricAtlas().cmap();
+                const auto cell_supports = basis::tensorCellSupports( *nsd.L2_ss.refinementLevels().at( level ) );
                 std::map<size_t, std::vector<std::pair<size_t, size_t>>> supports;
-
-                iterateCellsWhile( level_cmap, level_cmap.dim(), [&]( const topology::Cell& cell ) {
-                    const topology::FullyUnflattenedDart unflat =
-                        topology::unflattenFull( level_cmap, cell.dart() );
-                    const std::pair<size_t, size_t> indices(
-                        unflat.unflat_darts.at( 0 ).id(),
-                        unflat.unflat_darts.at( 1 ).id() );
-                    for( const basis::FunctionId& fid : level_space.connectivity( cell ) )
-                        supports[static_cast<size_t>( fid.id() )].push_back( indices );
-                    return true;
-                } );
+                for( size_t fid = 0; fid < cell_supports.size(); fid++ )
+                    for( const auto& indices : cell_supports.at( fid ) )
+                        supports[fid].emplace_back( indices.at( 0 ), indices.at( 1 ) );
                 return supports;
             },
             "level"_a,

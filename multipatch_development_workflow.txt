@@ -492,8 +492,8 @@ Current position:
     loop stays in StokesFlow, a separate repository; this library stays
     policy-free and adds an opt-in per-patch n-form support check. The
     two single-patch queries StokesFlow needs (10.4) are now C++
-    functions with tests; their Python bindings come next, after the
-    merge of origin/master.
+    functions with tests, and their Python bindings call them, with a
+    registered smoke test.
   - The volume Piola gate is complete.
   - Phase 5B is the next implementation task.
 

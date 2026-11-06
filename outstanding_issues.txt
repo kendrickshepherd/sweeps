@@ -1012,8 +1012,9 @@ MEDIUM PRIORITY — Architectural / Correctness
         admissibility as an explicit policy input (STEP 9 DECISION).
         [IN PROGRESS: docs and suite done; plan vetted 2026-11-05 (the
         loop stays in StokesFlow, an opt-in n-form check here); 10.4 first
-        half done 2026-11-05 (the two queries in C++, tested); next their
-        bindings, after the merge of origin/master; STEP 10 below]
+        half done 2026-11-05 (the two queries in C++, tested); second half
+        done 2026-11-06 (their bindings call them), awaiting review; STEP
+        10 below]
    STEP 2 RESULT (2026-10-20).  Which exception each current rejection
    reaches, MEASURED by mutation probe: each of validateMatchingInterfaces'
    two throws in turn was changed to std::runtime_error, the three binaries
@@ -2733,7 +2734,8 @@ MEDIUM PRIORITY — Architectural / Correctness
                      corner-jump layout that edge grading admits.
              A bypass probe for each of (i)-(iii), named when written;
              restored byte-identical.  Where the code and tests live: Q11.
-             [FIRST HALF DONE 2026-11-05: STEP 10.4 below]
+             [FIRST HALF DONE 2026-11-05; SECOND HALF DONE 2026-11-06,
+             awaiting review: STEP 10.4 below]
        10.5  Policy-free multipatch layer: a C++ hierarchical multipatch
              Navier-Stokes wrapper beside
              NavierStokesHierarchicalDiscretization (H1, H(div) and L2
@@ -2917,7 +2919,72 @@ MEDIUM PRIORITY — Architectural / Correctness
        two lambdas rewired to these functions with their Python shape kept
        ("dart", "level" and a 2-tuple "indices"; a dict from function id
        to a list of (i, j); out_of_range for a bad level), plus registered
-       Python smoke tests (numpy-aware SKIP_RETURN_CODE).
+       Python smoke tests (numpy-aware SKIP_RETURN_CODE).  [DONE
+       2026-11-06: STEP 10.4, SECOND HALF below]
+     STEP 10.4, SECOND HALF (2026-11-06).  The two Python bindings call the
+       native queries; SplinesAPI.cpp only converts (Q11).
+     Merge.  The user merged 4351a03 (112db41) and committed the first
+       smoke test (50613df), which passed on 4351a03's lambdas as merged.
+     Code, src/api/SplinesAPI.cpp.
+       activeLeafElementInfo calls topology::leafElementInfos and builds
+         the same records: "dart" (the dart id of the leaf handle),
+         "level", "indices" (i, j).
+       l2LevelSupports keeps its range check and message, calls
+         basis::tensorCellSupports on the level space, and fills the same
+         std::map<size_t, std::vector<std::pair<size_t, size_t>>>.  The
+         typed return keeps the signature in the docstring and in
+         pybind's TypeError text (-> dict[int, list[tuple[int, int]]]); a
+         py::dict would show -> dict.  A function with no cells gets no
+         key, as before.
+       Both read indices.at( 0 ) and at( 1 ): the Python class is 2D (two
+         knot vectors), so no index is dropped (ARGUED-FROM-CODE).
+     Compatibility, MEASURED.  Both bindings' complete Python results,
+       with exact types, nesting and order (records, keys, tuples, ints,
+       exceptions and their messages, both docstrings), dumped from
+       4351a03's module and from the rewired one: the smoke layout at
+       p = 1, 2 and 3; both Catch2 layouts at p = 2 and 3; unrefined;
+       uniformly refined; the AdaptiveLocal and NURBS subclasses.  Every
+       level, the two levels past the last (IndexError), level by keyword,
+       and -1 (TypeError).  Identical, but for the object address in the
+       TypeError text, which is masked.  The comparator flags a changed
+       index, a list for a tuple, two swapped leaves and a changed message
+       (checked).  Repeated on the final rebuild after the probes:
+       identical.
+     Smoke test, test/HierarchicalAmrQueries_smoke.py, registered as
+       python_amr_queries_smoke_test (#254), run with PYTHONPATH set to
+       build/src/api.  Fixture: 4 x 3 level 0 cells, p = 2, (2, 0)
+       refined, then (5, 1), so (i, j) reversal changes the leaves.
+       Checks: record keys and types; the leaves against the marks; per
+       level, one key per function and nonempty lists of (i, j) ints that
+       cover the level's cells; five supports derived by hand (L2 degree
+       1: function k covers cells k - 1 and k); IndexError past the last
+       level, with its message.  Without numpy it exits 77, which ctest
+       reports Skipped (checked with the numpy-less 3.10 interpreter in a
+       scratch project).  Passes on the rewired module and on 4351a03's.
+     Bypass probes, MEASURED.  Each mutates the rewired binding, rebuilds,
+       runs the smoke test and restores byte-identical (sha256); each
+       predicted before it ran.
+       P4  Leaf indices reversed: 1 problem, the leaves against the marks.
+       P5  Support cell indices reversed: 8, coverage at each of the 3
+           levels and all 5 hand-derived supports.
+       P6  Each support filed under id + 1 mod n: 5, the hand-derived
+           supports only.  Keys and coverage still pass, so only those
+           five catch a shifted id.
+     Result, MEASURED.  Native query tests: 18 assertions in 6 cases.
+       Smoke test: 0 problems.  Full build, no warnings.  Full ctest
+       254/254 in one invocation (121 s; lid open, no sleep in the pmset
+       log): the 253 of the first half and the smoke test.
+     Limits.
+       - One smoke fixture at one degree; correctness rests on the Catch2
+         tests (Q11).
+       - Compatibility is measured on the eleven constructions above, not
+         on all inputs; elsewhere it is ARGUED-FROM-CODE (same calls, same
+         iteration order).
+       - activeLeafElementInfo takes no input, so leafElementInfo's
+         std::invalid_argument cannot be reached from Python.
+     Next: 10.5, the policy-free multipatch layer.  If it adds native
+       tests that need src/api, factor that source into a reusable CMake
+       target (REVIEW above).
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces
