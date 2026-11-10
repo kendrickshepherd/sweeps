@@ -183,4 +183,29 @@ namespace basis
         }
         return out;
     }
+
+    namespace
+    {
+        void checkPatchAndLevel( const HierarchicalMultiPatchSplineSpace& ss, const size_t patch, const size_t level )
+        {
+            if( patch >= ss.constituents().size() )
+                throw std::out_of_range( "Patch is outside the hierarchical multipatch space." );
+            if( level >= ss.refinementLevels().size() )
+                throw std::out_of_range( "Level is outside the hierarchical multipatch space." );
+        }
+    }
+
+    const std::vector<FunctionId>&
+        patchLevelActiveFunctions( const HierarchicalMultiPatchSplineSpace& ss, const size_t patch, const size_t level )
+    {
+        checkPatchAndLevel( ss, patch, level );
+        return ss.constituents().at( patch )->activeFunctions().at( level );
+    }
+
+    std::vector<std::vector<SmallVector<size_t, 3>>>
+        patchLevelTensorCellSupports( const HierarchicalMultiPatchSplineSpace& ss, const size_t patch, const size_t level )
+    {
+        checkPatchAndLevel( ss, patch, level );
+        return tensorCellSupports( *ss.refinementLevels().at( level )->subSpaces().at( patch ) );
+    }
 }

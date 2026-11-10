@@ -411,4 +411,24 @@ namespace topology
         }
         return leaf_elements;
     }
+
+    MultiPatchLeafElementInfo leafElementInfo( const HierarchicalMultiPatchCombinatorialMap& cmap, const Cell& leaf )
+    {
+        if( leaf.dim() != cmap.dim() )
+            throw std::invalid_argument( "leafElementInfo requires a top-dimensional cell" );
+
+        const auto [patch, constituent_d] = cmap.dartRanges().toLocalDart( leaf.dart() );
+        const LeafElementInfo info = leafElementInfo( *cmap.constituents().at( patch ), Cell( constituent_d, leaf.dim() ) );
+        return { leaf, patch, info.level, info.indices };
+    }
+
+    std::vector<MultiPatchLeafElementInfo> leafElementInfos( const HierarchicalMultiPatchCombinatorialMap& cmap )
+    {
+        std::vector<MultiPatchLeafElementInfo> out;
+        iterateCellsWhile( cmap, cmap.dim(), [&]( const Cell& c ) {
+            out.push_back( leafElementInfo( cmap, c ) );
+            return true;
+        } );
+        return out;
+    }
 }; // namespace topology

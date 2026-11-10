@@ -3,7 +3,10 @@
 
 #include <IndexOperations.hpp>
 #include <HierarchicalTPSplineSpace.hpp>
+#include <MultiPatchSplineFactory.hpp>
+#include <TraceExtraction.hpp>
 #include <CombinatorialMapMethods.hpp>
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
@@ -274,5 +277,198 @@ namespace api
           cpt_weights( weightsFromHomogeneousControlPoints( homogeneous_cpts ) ),
           Geometry( H1_ss, 3 )
     {}
+
+    namespace
+    {
+        using InternalConnectionsMap = topology::MultiPatchCombinatorialMap::InternalConnectionsMap;
+
+        size_t sideId( const PatchSide side )
+        {
+            switch( side )
+            {
+                case PatchSide::S0: return basis::ElementSide( 0, true ).sideId();
+                case PatchSide::S1: return basis::ElementSide( 0, false ).sideId();
+                case PatchSide::T0: return basis::ElementSide( 1, true ).sideId();
+                case PatchSide::T1: return basis::ElementSide( 1, false ).sideId();
+            }
+            throw std::invalid_argument( "Unknown patch side." );
+        }
+
+        InternalConnectionsMap internalConnections( const size_t n_patches,
+                                                    const std::vector<std::pair<PatchSideRef, PatchSideRef>>& gluing )
+        {
+            using ConstituentSide = topology::MultiPatchCombinatorialMap::ConstituentSide;
+            const auto constituent_side = [&]( const PatchSideRef& ref ) {
+                if( ref.patch >= n_patches ) throw std::out_of_range( "Gluing names a patch outside the discretization." );
+                return ConstituentSide{ ref.patch, sideId( ref.side ) };
+            };
+
+            InternalConnectionsMap out;
+            for( const auto& [a, b] : gluing )
+            {
+                const ConstituentSide first = constituent_side( a );
+                const ConstituentSide second = constituent_side( b );
+                const auto flip = topology::MultiPatchCombinatorialMap::TPPermutation::Flip1d;
+                if( not out.emplace( first, std::pair{ flip, second } ).second or
+                    not out.emplace( second, std::pair{ flip, first } ).second )
+                    throw std::invalid_argument( "Gluing names a patch side more than once." );
+            }
+            return out;
+        }
+
+        void checkPatchGeometries( const std::vector<PatchGeometry>& patches )
+        {
+            if( patches.empty() ) throw std::invalid_argument( "A multipatch discretization needs at least one patch." );
+            const Eigen::Index rows = patches.front().control_points.rows();
+            if( rows == 0 ) throw std::invalid_argument( "Control points must have at least one spatial coordinate." );
+            for( const PatchGeometry& patch : patches )
+            {
+                if( patch.control_points.rows() != rows )
+                    throw std::invalid_argument( "All patches must have the same spatial dimension." );
+                if( not patch.control_points.allFinite() )
+                    throw std::invalid_argument( "Control points must be finite." );
+            }
+        }
+
+        std::vector<std::shared_ptr<const basis::MultiPatchSplineSpace>>
+            dyadicH1Levels( const std::vector<PatchGeometry>& patches,
+                            const InternalConnectionsMap& connections,
+                            const size_t n_levels )
+        {
+            std::vector<SmallVector<basis::KnotVector, 3>> kvs;
+            for( const PatchGeometry& patch : patches ) kvs.push_back( { patch.kv_s, patch.kv_t } );
+
+            std::vector<std::shared_ptr<const basis::MultiPatchSplineSpace>> levels;
+            levels.reserve( n_levels );
+            for( size_t level = 0; level < n_levels; level++ )
+            {
+                if( level > 0 )
+                    for( SmallVector<basis::KnotVector, 3>& patch_kvs : kvs )
+                        for( basis::KnotVector& kv : patch_kvs ) kv = basis::dyadicRefine( kv );
+
+                std::vector<std::shared_ptr<const basis::TPSplineSpace>> level_patches;
+                for( size_t patch = 0; patch < patches.size(); patch++ )
+                    level_patches.push_back( std::make_shared<const basis::TPSplineSpace>( basis::buildBSpline(
+                        kvs.at( patch ), { patches.at( patch ).degree_s, patches.at( patch ).degree_t } ) ) );
+
+                levels.push_back( std::make_shared<const basis::MultiPatchSplineSpace>(
+                    basis::buildH1MultiPatchSplineSpace( level_patches, connections ) ) );
+            }
+            return levels;
+        }
+
+        const topology::MultiPatchCombinatorialMap& levelCMap( const basis::MultiPatchSplineSpace& ss )
+        {
+            return ss.basisComplex().parametricAtlas().cmap();
+        }
+
+        std::vector<std::vector<topology::Cell>>
+            multiPatchLeafElements( const std::vector<std::shared_ptr<const basis::MultiPatchSplineSpace>>& levels,
+                                    const std::vector<std::vector<PatchElement>>& elems_to_refine )
+        {
+            const size_t n_patches = levelCMap( *levels.front() ).constituents().size();
+            std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>> patch_refine(
+                n_patches, std::vector<std::vector<std::pair<size_t, size_t>>>( elems_to_refine.size() ) );
+
+            for( size_t level = 0; level < elems_to_refine.size(); level++ )
+                for( const auto& [patch, i, j] : elems_to_refine.at( level ) )
+                {
+                    if( patch >= n_patches )
+                        throw std::out_of_range( "A refinement names a patch outside the discretization." );
+                    const auto lines =
+                        topology::tensorProductComponentCMaps( *levelCMap( *levels.at( level ) ).constituents().at( patch ) );
+                    if( i >= topology::cellCount( *lines.at( 0 ), 1 ) or j >= topology::cellCount( *lines.at( 1 ), 1 ) )
+                        throw std::out_of_range( "A refinement names an element outside its patch level." );
+                    patch_refine.at( patch ).at( level ).emplace_back( i, j );
+                }
+
+            std::vector<std::vector<topology::Cell>> out( levels.size() );
+            for( size_t patch = 0; patch < n_patches; patch++ )
+            {
+                std::vector<std::shared_ptr<const topology::TPCombinatorialMap>> patch_levels;
+                for( const auto& level : levels ) patch_levels.push_back( levelCMap( *level ).constituents().at( patch ) );
+
+                const std::vector<std::vector<topology::Cell>> patch_leaves =
+                    leafElements( patch_levels, patch_refine.at( patch ) );
+                for( size_t level = 0; level < levels.size(); level++ )
+                    for( const topology::Cell& c : patch_leaves.at( level ) )
+                        out.at( level ).emplace_back( levelCMap( *levels.at( level ) ).toGlobalDart( patch, c.dart() ),
+                                                      c.dim() );
+            }
+            return out;
+        }
+
+        basis::HierarchicalMultiPatchSplineSpace
+            buildHierarchicalMultiPatchH1( const std::vector<PatchGeometry>& patches,
+                                           const std::vector<std::pair<PatchSideRef, PatchSideRef>>& gluing,
+                                           const std::vector<std::vector<PatchElement>>& elems_to_refine )
+        {
+            checkPatchGeometries( patches );
+            const auto levels =
+                dyadicH1Levels( patches, internalConnections( patches.size(), gluing ), elems_to_refine.size() + 1 );
+            return basis::buildHierarchicalSplineSpace( levels, multiPatchLeafElements( levels, elems_to_refine ) );
+        }
+
+        // Each patch's coefficients prolonged onto its constituent; shared H1 functions must agree.
+        Eigen::MatrixXd multiPatchGeometry( const basis::HierarchicalMultiPatchSplineSpace& h1,
+                                            const std::vector<PatchGeometry>& patches )
+        {
+            constexpr double tol = NavierStokesHierarchicalMultiPatchDiscretization::shared_coefficient_tolerance;
+            const Eigen::Index rows = patches.front().control_points.rows();
+            Eigen::MatrixXd out( rows, h1.numFunctions() );
+            std::vector<bool> assigned( h1.numFunctions(), false );
+
+            for( size_t patch = 0; patch < patches.size(); patch++ )
+            {
+                const basis::HierarchicalTPSplineSpace& constituent = *h1.constituents().at( patch );
+                const Eigen::MatrixXd& unrefined = patches.at( patch ).control_points;
+                if( unrefined.cols() != static_cast<Eigen::Index>( constituent.refinementLevels().front()->numFunctions() ) )
+                    throw std::invalid_argument( "Patch control point count does not match the patch spline space." );
+
+                const Eigen::MatrixXd patch_cpts = unrefined * prolongationOperator( constituent ).transpose();
+                const std::vector<basis::FunctionId>& fids = h1.functionIdMap().at( patch );
+                if( static_cast<Eigen::Index>( fids.size() ) != patch_cpts.cols() )
+                    throw std::logic_error( "Constituent and multipatch H1 function counts differ." );
+
+                for( Eigen::Index j = 0; j < patch_cpts.cols(); j++ )
+                {
+                    const size_t g = fids.at( j ).id();
+                    if( not assigned.at( g ) )
+                    {
+                        out.col( g ) = patch_cpts.col( j );
+                        assigned.at( g ) = true;
+                        continue;
+                    }
+                    for( Eigen::Index r = 0; r < rows; r++ )
+                    {
+                        const double a = out( r, g );
+                        const double b = patch_cpts( r, j );
+                        if( not( std::abs( a - b ) <= tol * std::max( { 1.0, std::abs( a ), std::abs( b ) } ) ) )
+                            throw std::invalid_argument( "Patch geometries disagree on a shared H1 coefficient." );
+                    }
+                }
+            }
+
+            if( std::find( assigned.begin(), assigned.end(), false ) != assigned.end() )
+                throw std::logic_error( "An H1 function has no patch coefficient." );
+            return out;
+        }
+    }
+
+    NavierStokesHierarchicalMultiPatchDiscretization::NavierStokesHierarchicalMultiPatchDiscretization(
+        const std::vector<PatchGeometry>& patches,
+        const std::vector<std::pair<PatchSideRef, PatchSideRef>>& gluing,
+        const std::vector<std::vector<PatchElement>>& elems_to_refine )
+        : H1_ss( buildHierarchicalMultiPatchH1( patches, gluing, elems_to_refine ) ),
+          HDIV_ss( basis::buildHDivHierarchicalMultiPatchSplineSpace( H1_ss ) ),
+          L2_ss( basis::buildL2HierarchicalMultiPatchSplineSpace( HDIV_ss ) ),
+          cmap_bdry( H1_ss.basisComplex().parametricAtlas().cmap() ),
+          cpts( multiPatchGeometry( H1_ss, patches ) ),
+          H1( H1_ss, 3 ),
+          HDIV( HDIV_ss, 2 ),
+          L2( L2_ss, 1 )
+    {
+        checkGeometryColumnCount( H1_ss, cpts );
+    }
 
 }

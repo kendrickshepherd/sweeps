@@ -1013,8 +1013,9 @@ MEDIUM PRIORITY — Architectural / Correctness
         [IN PROGRESS: docs and suite done; plan vetted 2026-11-05 (the
         loop stays in StokesFlow, an opt-in n-form check here); 10.4 first
         half done 2026-11-05 (the two queries in C++, tested); second half
-        done 2026-11-06 (their bindings call them), awaiting review; STEP
-        10 below]
+        done 2026-11-06 (their bindings call them), committed d0d1adc; 10.5
+        first half done 2026-11-06, reviewed and corrections applied the
+        same day, awaiting commit; STEP 10 below]
    STEP 2 RESULT (2026-10-20).  Which exception each current rejection
    reaches, MEASURED by mutation probe: each of validateMatchingInterfaces'
    two throws in turn was changed to std::runtime_error, the three binaries
@@ -2734,8 +2735,8 @@ MEDIUM PRIORITY — Architectural / Correctness
                      corner-jump layout that edge grading admits.
              A bypass probe for each of (i)-(iii), named when written;
              restored byte-identical.  Where the code and tests live: Q11.
-             [FIRST HALF DONE 2026-11-05; SECOND HALF DONE 2026-11-06,
-             awaiting review: STEP 10.4 below]
+             [DONE: first half d7b8c3c, second half d0d1adc; STEP 10.4
+             below]
        10.5  Policy-free multipatch layer: a C++ hierarchical multipatch
              Navier-Stokes wrapper beside
              NavierStokesHierarchicalDiscretization (H1, H(div) and L2
@@ -2748,6 +2749,8 @@ MEDIUM PRIORITY — Architectural / Correctness
              per-cell level map built from the marks by the test, never
              from leafElements; on one patch, 10.4's queries agree, as a
              cross-check only.  2D first, as StokesFlow is.
+             [FIRST HALF DONE 2026-11-06, reviewed; awaiting commit:
+             STEP 10.5 below]
        10.6  NFormSupportPolicy validator, opt-in (D2, D3): C++ with a
              binding, over the whole hierarchy, patch by patch; it reports
              the first failure by (patch, level, cell) and throws for
@@ -2984,7 +2987,218 @@ MEDIUM PRIORITY — Architectural / Correctness
          std::invalid_argument cannot be reached from Python.
      Next: 10.5, the policy-free multipatch layer.  If it adds native
        tests that need src/api, factor that source into a reusable CMake
-       target (REVIEW above).
+       target (REVIEW above).  [DONE: STEP 10.5 below]
+     STEP 10.5, FIRST HALF (2026-11-06).  The policy-free multipatch layer
+       in C++, tested with Catch2; no bindings yet.
+     Code.
+       src/api: NavierStokesHierarchicalMultiPatchDiscretization (with
+         PatchGeometry, PatchSideRef, PatchElement) beside
+         NavierStokesHierarchicalDiscretization, deriving
+         NavierStokesDiscretization.  Level l + 1 is the dyadic refinement
+         of level l on every patch (D6).  Each level is built by
+         buildH1MultiPatchSplineSpace, so the strong interface checks run
+         on every level (ARGUED-FROM-CODE; the scaled-interface refusal
+         MEASURES that they run).  HDIV and L2 come from the existing
+         hierarchical builders.  Marks are (patch, i, j) per level,
+         range-checked (std::out_of_range), then passed per patch to the
+         existing leafElements (std::runtime_error for a non-leaf, as
+         before).  Gluing: each side pair glued with Flip1d.  Geometry: each patch's unrefined control points
+         prolonged onto its constituent (prolongationOperator) and placed
+         by functionIdMap.  Shared H1 coefficients a, b must satisfy
+         |a - b| <= 1e-10 max( 1, |a|, |b| ), NaN-safe, else
+         std::invalid_argument; non-finite input is refused up front.  No
+         policy (D2).  CORRECTED by the review: first written here as
+         relative; the formula is mixed, absolute below magnitude 1.
+       topology: MultiPatchLeafElementInfo and leafElementInfo(s) for the
+         hierarchical multipatch cmap: the patch from the dart range;
+         the level and indices from the constituent's 10.4 query.
+       basis: patchLevelActiveFunctions and patchLevelTensorCellSupports,
+         std::out_of_range for a patch or level outside the space.
+       CMake: NavierStokesDiscretization.cpp is now the SHARED library
+         discretization; splines, HierarchicalAmrQueries_test and the new
+         test link it.
+     Tests, test/HierarchicalMultiPatchAmr_test.cpp, 9 cases, tags
+       [amr_queries][multipatch].  Four two-patch layouts at p = 2 and 3:
+       side by side S1-S0 (jump two at the interface); stacked T1-T0 with
+       a translated s; half turn S1-S1 (t pattern reversed, both sides
+       refined); quarter turn S1-T0 (t meets s).  Oracles built by the
+       test:
+         (i)   leaves against the marks, per patch; the same (patch, level,
+               indices) from every dart; the handle kept; iterateCellsWhile
+               order.  Every fixture must have a leaf interface dart on
+               another level (a coarse leaf facing finer leaves across the
+               interface).
+         (ii)  the L2 hierarchical cmap, a separate object
+               (buildL2HierarchicalMultiPatchSplineSpace rebuilds it from
+               leafElements), has H1's darts, phi -1, 1 and 2 images and
+               leaf infos.
+         (iii) per-patch H1 and L2 level supports against the level knots.
+         (iv)  per-patch H1 and L2 active ids against multipatch support
+               containment: a level function's support is the union of its
+               patch supports, glued by the level space's functionIdMap
+               (validated upstream, not derived here).  H1 must have a
+               function spanning two patches on every level; L2 must have
+               none.
+         (v)   geometry: F(x, y) = (x + 0.1 y^2, y + 0.05 x^2) after an
+               axis-aligned patch map, control points from blossoms;
+               evaluated at each leaf's center and quarter points (a set
+               blind to the leaf's dart) against F.
+         (vi)  refusals, each by type and message: disagreeing geometry (a
+               1e-6 shift); a scaled interface (the strong check); a side
+               named twice; a gluing or mark patch out of range; i or j out
+               of range, also at level 1; a non-leaf or repeated mark; NaN
+               and inf; wrong column count, mixed or zero rows; no patches.
+               Also leafElementInfo's std::invalid_argument and both basis
+               queries' std::out_of_range.
+         (vii) one patch: leaves, H1 and L2 active ids and L2 supports
+               agree with the single-patch class, as a cross-check only.
+     Bypass probes, MEASURED.  Each predicted before it ran; restored
+       byte-identical (sha1).
+       P1  Agreement check disabled: 1 failure, the disagreeing-geometry
+           refusal.  As predicted.
+       P2  Patch forced to 0: (i) and (v) fail on all 8 fixture-degree
+           runs.  As predicted.
+       P3  Level read from the supplied dart: 8, (i) on all 8, among them
+           patch 1's level 0 leaf giving level 2 from its interface darts
+           (side by side, p = 2).  As predicted for (i).  (v) and (vii)
+           pass: there iterateCellsWhile hands out a leaf-level dart
+           (observation).
+       P4  Active ids from patch 0 whatever the patch: 7, (iv); predicted
+           8.  Half turn at p = 3 passes: its two patches have the same
+           patch-local active ids on every level (ARGUED, by hand: the
+           same local marks at level 0, the level 1 mark deactivates
+           nothing at p = 3, level 2 empty).
+     Result, MEASURED.  New test: 123 assertions in 9 cases.  10.4's 18 in
+       6 after relinking.  HierarchicalMultiPatchCMap, HierarchicalMulti-
+       PatchSplineSpace, VectorConformingHierarchicalMultiPatchSpline-
+       Space, MultiPatchSplineFactory and HierarchicalTPCMap tests pass;
+       Python smoke tests 2/2.  No full ctest:
+       the basis and topology changes only add functions.  CORRECTED by
+       the review: the change is not additive, since CMake now links
+       splines and two tests through a new shared library; a full suite
+       is required (APPLIED below).
+     Limits.
+       - 2D only.  Every fixture's patch map preserves orientation; none
+         is reflected.
+       - The H1 active oracle trusts the level space's functionIdMap for
+         which functions are glued.
+       - HDIV per-patch active ids are not queried.
+       - Geometry: axis-aligned affine patch maps of one quadratic field.
+       - The single-patch leafElements has no range check of its own; the
+         multipatch wrapper checks before calling it (observation; not
+         changed).
+     Open, for review: the names; deriving NavierStokesDiscretization;
+       H1 and L2 active ids only, or HDIV too; a constructor guard for
+       the L2 and H1 cmap structure, or the test pin (ii) only.  Found in
+       SplinesAPI.cpp, ARGUED-FROM-CODE, neither probed nor changed:
+       interiorEdgeSegments pairs elements across every parametric domain,
+       which is wrong for multipatch (it matters to the bindings half);
+       the T1 boundary edges use sourceCMap().maxDartId() where
+       lineCMap().maxDartId() looks intended, which differs when n_s and
+       n_t differ.
+     Next, the second half: bindings with "patch" added to the leaf
+       records ("dart", "level" and "indices" kept), per-patch active ids
+       and L2 level supports, std::out_of_range to IndexError, and a
+       registered Python smoke test.  Added by the review: the multipatch
+       Python class shadows interiorEdgeSegments with NotImplementedError,
+       and the smoke test checks the refusal; PatchSideRef and
+       PatchElement are bound or converted as the structs below.
+
+     REVIEW OF STEP 10.5 FIRST HALF (user, 2026-11-06).
+       Required before the bindings:
+         1. Keep deriving NavierStokesDiscretization, but block the unsafe
+            inherited method: bound with that Python base, the multipatch
+            class would inherit interiorEdgeSegments, which compares
+            patch-local parameter coordinates as though all patches
+            shared one chart.  Shadow it on the multipatch Python class
+            and raise NotImplementedError.  A topology-aware
+            implementation is separate, later work.  Audit the other
+            inherited base methods before exposing the class.
+         2. Strengthen P4: change the half-turn marks so the two patches
+            have different active sets at p = 3; the patch-0 sabotage
+            must then fail all 8 configurations.
+         3. Correct the support-query documentation: indexed by full
+            patch-local level FunctionId, not by active id.
+         4. Run the full suite before committing: the CMake change is not
+            additive.
+       Decisions:
+         - Names good; PatchSideRef and PatchElement become structs with
+           named fields before binding.
+         - H(div) per-patch query deferred: it must represent component
+           and orientation correctly.
+         - No L2/H1 cmap guard in the wrapper.  The builder owns that
+           invariant and test pin (ii) suffices; a runtime postcondition,
+           if wanted later, goes in the L2 builder.
+         - Keep the existing exception split.  A taxonomy change must be
+           a shared single- and multipatch contract change, not a local
+           translation.
+         - Tolerance: mixed absolute/relative, not relative.  Keep it, but
+           name the constant, document the formula, and test one accepted
+           and one refused value near the threshold.  The agreement check
+           itself is sensible and NaN-safe.
+         - The T1 maxDartId finding is a separate issue (item 19), not
+           part of 10.5, resolved before StokesFlow relies on the
+           boundary APIs.
+       Ready to commit after the documentation fix, P4 hardening, the
+       tolerance pin, the refusal plan and a green full suite.
+
+     APPLIED 2026-11-06.
+       1. HierarchicalMultiPatchSplineSpace.hpp: patchLevelTensorCell-
+          Supports is "indexed by full patch-local level FunctionId; use
+          patchLevelActiveFunctions to select the active entries".
+       2. PatchSideRef { patch, side } and PatchElement { patch, i, j }
+          are structs; <tuple> dropped from the header.
+       3. shared_coefficient_tolerance = 1e-10, a public static constexpr
+          of the class, documented with the formula; the constructor's
+          @throws names it.  The comparison is unchanged.
+       4. Half turn: patch 0 also marks level 0 (0, 0), so at p = 3 its
+          level 0 marks (0, 0) and (1, 0) deactivate local ids 0 to 3
+          while patch 1's (1, 1) deactivates only id 3 (ARGUED, by hand;
+          P4 below MEASURES that the active sets differ).
+       5. New case "Shared H1 coefficients agree to 1e-10 max( 1, |a|,
+          |b| ), absolute and relative": side by side, affine patch maps
+          (control points at the Greville points), p = 2 and 3, patch 1's
+          first control point shifted by 0.9 and 1.1 times the threshold
+          at x = 0 (threshold 1e-10, the absolute regime) and at x = 1000
+          (threshold 1e-7, the relative regime).  0.9 must construct, 1.1
+          must throw "disagree on a shared H1 coefficient".  The shift
+          moves every shared coefficient it reaches by the same amount,
+          since prolongation rows sum to one (ARGUED).
+       Bypass probes, MEASURED; each predicted before it ran, all as
+       predicted; sources restored byte-identical (sha1), rebuilt, and
+       the restored test passes.
+         P1  Agreement check disabled: 5, the 1e-6 refusal and the four
+             1.1 refusals.
+         P2  Patch forced to 0: 16, (i) and (v) on all 8 fixture-degree
+             runs.
+         P3  Level read from the supplied dart: 8, (i) on all 8.
+         P4  Active ids from patch 0 whatever the patch: 8, now including
+             half turn at p = 3.
+         P5  Absolute only (<= tol): 2, x = 1000 at 0.9, p = 2 and 3.
+         P6  Relative only (max( |a|, |b| )): 2, x = 0 at 0.9, p = 2 and 3.
+       Result, MEASURED.  New test: 131 assertions in 10 cases.
+       Full ctest, one run, 2026-11-06 17:51 to 17:53, -j 8: 264/264 pass,
+       among them the new test's 10 cases, python_import_test and
+       python_amr_queries_smoke_test; #30, the macaroni vertices, in
+       129.81 s.
+       Inherited-method audit (ARGUED-FROM-CODE, SplinesAPI.cpp, the
+       Python class NavierStokesDiscretization):
+         - Safe on multipatch: H1, HDIV, L2, geometry, control_points,
+           geometry_control_points, is_rational, elements, localizeElement,
+           localizeParentPoint and localizePoint, mapping, the jacobians
+           and determinants, and the spatial HDiv, Piola and L2
+           evaluations.  Each goes through the evaluator or the cmap.
+         - UNSAFE: interiorEdgeSegments, which pairs elements by the
+           atlas's parametric starts and lengths across all patches.  The
+           bindings shadow it with NotImplementedError.
+         - parametricPoint returns a patch-local point with no patch id;
+           not refused, but untested on multipatch, and a caller needs
+           the leaf's patch to read it.
+         - SplineSpace's first-derivative evaluation is in patch
+           parametric coordinates; same caveat.
+         - Module functions (grevillePoints, globallyHRefine,
+           globallyPElevate) take the TP class only; the TP and
+           hierarchical classes' own methods are not inherited.
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces
@@ -3675,3 +3889,29 @@ BLOCKING ITEM 1 STEP 6 — Found 2026-10-20, reviewed 2026-10-21
       specified; one existing record's sides swap.  M12 is unchanged in
       class: each side is still named through item 16's to_space_cell,
       by one of its leaf's darts, unspecified which.
+
+
+19. T1 Boundary Edges Use sourceCMap().maxDartId() For The Line Dart
+    File(s): src/api/SplinesAPI.cpp  tpBoundaryEdges() (line 42),
+             hierarchicalBoundaryEdges() (line 92), and the in-class
+             "boundaryEdges" lambdas of the TP (line 538) and hierarchical
+             (line 855) bindings
+
+    Status: ARGUED-FROM-CODE, unprobed, unreproduced.  Found during step
+    10.5's first half; recorded separately by the review (2026-11-06), not
+    part of 10.5.
+
+    FINDING.  For side T1 each site builds line_dart from
+    sourceCMap().maxDartId(), where lineCMap().maxDartId() looks intended.
+    The S1 sites (lines 28, 78, 516, 833) use sourceCMap() for
+    source_dart, as they should.  The two counts differ when n_s != n_t,
+    so the T1 edges would then start from the wrong dart.  Every fixture
+    so far may have n_s == n_t (not checked).
+
+    PLAN (review, 2026-11-06).
+      1. A rectangular n_s != n_t reproduction first, measured on the
+         current code.
+      2. Fix all four sites, then probe each; the four are duplicates, so
+         each must be shown reached.
+      3. A separate commit, before StokesFlow integration relies on the
+         boundary APIs.

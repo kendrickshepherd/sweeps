@@ -39,4 +39,16 @@ namespace basis
                                       const std::vector<std::vector<topology::Cell>>& leaf_elements );
 
     std::vector<std::pair<size_t, FunctionId>> fidsToRefinementLevelFids( const HierarchicalMultiPatchSplineSpace& ss );
+
+    /// @brief The patch-local level function ids of one patch on one level that are active in ss, ascending.
+    /// Ids are the FunctionIds of ss.refinementLevels().at( level )->subSpaces().at( patch ).
+    /// @throws std::out_of_range if patch or level is outside ss.
+    const std::vector<FunctionId>&
+        patchLevelActiveFunctions( const HierarchicalMultiPatchSplineSpace& ss, const size_t patch, const size_t level );
+
+    /// @brief tensorCellSupports of ss.refinementLevels().at( level )->subSpaces().at( patch ).
+    /// Indexed by full patch-local level FunctionId; use patchLevelActiveFunctions to select the active entries.
+    /// @throws std::out_of_range if patch or level is outside ss.
+    std::vector<std::vector<SmallVector<size_t, 3>>>
+        patchLevelTensorCellSupports( const HierarchicalMultiPatchSplineSpace& ss, const size_t patch, const size_t level );
 }
