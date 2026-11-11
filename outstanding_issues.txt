@@ -1014,8 +1014,9 @@ MEDIUM PRIORITY — Architectural / Correctness
         loop stays in StokesFlow, an opt-in n-form check here); 10.4 first
         half done 2026-11-05 (the two queries in C++, tested); second half
         done 2026-11-06 (their bindings call them), committed d0d1adc; 10.5
-        first half done 2026-11-06, reviewed and corrections applied the
-        same day, awaiting commit; STEP 10 below]
+        first half done 2026-11-06, reviewed, committed 1c214e1; second
+        half (bindings) done 2026-11-10, reviewed and corrections applied
+        the same day, awaiting commit; STEP 10 below]
    STEP 2 RESULT (2026-10-20).  Which exception each current rejection
    reaches, MEASURED by mutation probe: each of validateMatchingInterfaces'
    two throws in turn was changed to std::runtime_error, the three binaries
@@ -2749,8 +2750,9 @@ MEDIUM PRIORITY — Architectural / Correctness
              per-cell level map built from the marks by the test, never
              from leafElements; on one patch, 10.4's queries agree, as a
              cross-check only.  2D first, as StokesFlow is.
-             [FIRST HALF DONE 2026-11-06, reviewed; awaiting commit:
-             STEP 10.5 below]
+             [FIRST HALF DONE 2026-11-06, committed 1c214e1; SECOND
+             HALF DONE 2026-11-10, reviewed and corrections applied the
+             same day, awaiting commit: STEP 10.5 below]
        10.6  NFormSupportPolicy validator, opt-in (D2, D3): C++ with a
              binding, over the whole hierarchy, patch by patch; it reports
              the first failure by (patch, level, cell) and throws for
@@ -3099,10 +3101,12 @@ MEDIUM PRIORITY — Architectural / Correctness
      Next, the second half: bindings with "patch" added to the leaf
        records ("dart", "level" and "indices" kept), per-patch active ids
        and L2 level supports, std::out_of_range to IndexError, and a
-       registered Python smoke test.  Added by the review: the multipatch
-       Python class shadows interiorEdgeSegments with NotImplementedError,
-       and the smoke test checks the refusal; PatchSideRef and
+       registered Python smoke test.  Added by the review: the base
+       interiorEdgeSegments binding refuses multipatch objects with
+       NotImplementedError, including explicit dispatch through the base
+       class, and the smoke test checks the refusal; PatchSideRef and
        PatchElement are bound or converted as the structs below.
+       [DONE: STEP 10.5, SECOND HALF below]
 
      REVIEW OF STEP 10.5 FIRST HALF (user, 2026-11-06).
        Required before the bindings:
@@ -3190,7 +3194,8 @@ MEDIUM PRIORITY — Architectural / Correctness
            evaluations.  Each goes through the evaluator or the cmap.
          - UNSAFE: interiorEdgeSegments, which pairs elements by the
            atlas's parametric starts and lengths across all patches.  The
-           bindings shadow it with NotImplementedError.
+           bindings shadow it with NotImplementedError.  [REPLACED by a
+           guard in the base binding: STEP 10.5 SECOND HALF, APPLIED]
          - parametricPoint returns a patch-local point with no patch id;
            not refused, but untested on multipatch, and a caller needs
            the leaf's patch to read it.
@@ -3199,6 +3204,212 @@ MEDIUM PRIORITY — Architectural / Correctness
          - Module functions (grevillePoints, globallyHRefine,
            globallyPElevate) take the TP class only; the TP and
            hierarchical classes' own methods are not inherited.
+
+     STEP 10.5, SECOND HALF (2026-11-10).  The bindings, in
+       src/api/SplinesAPI.cpp only.  They marshal (Q11): every value comes
+       from a native query committed in 1c214e1.
+       Code:
+         - PatchGeometry, PatchSideRef and PatchElement are bound as
+           classes over the structs, with keyword constructors and
+           read-only fields.  There is no conversion from tuples: a tuple
+           where a PatchElement is expected raises TypeError.
+         - NavierStokesHierarchicalMultiPatchDiscretization, a Python
+           subclass of NavierStokesDiscretization, is built from
+           (patches, gluing, elems_to_refine).  Its docstring names the
+           exceptions, using pybind's built-in translation with no
+           translator added: std::out_of_range -> IndexError,
+           std::runtime_error -> RuntimeError, std::invalid_argument ->
+           ValueError.
+         - activeLeafElementInfo() returns one dict per leaf with "dart",
+           "patch", "level" and "indices".  "indices" is a 2-tuple,
+           patch-local and level-local.  Source:
+           topology::leafElementInfos.
+         - h1PatchLevelActiveIds(patch, level) and
+           l2PatchLevelActiveIds(patch, level) return ascending ids of
+           that patch's level space.  Source:
+           basis::patchLevelActiveFunctions, through one helper,
+           patchLevelActiveIds.
+         - l2PatchLevelSupports(patch, level) returns {id: [(i, j), ...]}
+           for every function of the patch's level space, keyed by full
+           ids, not active ids.  Source:
+           basis::patchLevelTensorCellSupports.  The return is a typed
+           std::map, as in 10.4's l2LevelSupports.
+         - interiorEdgeSegments is shadowed: it raises
+           NotImplementedError with a message naming the cause.
+           [REPLACED by a guard in the base binding: APPLIED below]
+       Choices to vet:
+         (a) The method names differ from the single-patch ones, so
+             StokesFlow's single-patch paths fail loudly instead of
+             reading one patch or a mixed id space.
+             RefinementUtilities.py:459 raises RuntimeError because
+             l2LevelSupports and hierarchicalRefinementDiagnostics are
+             absent.  activeLeafElementInfo keeps its name, since its
+             records only gain a key.
+         (b) There is no hierarchicalRefinementDiagnostics: its
+             "levels"/"active_ids" shape has no patch.
+         (c) Only H1 and L2 active ids are bound.  H(div) is deferred,
+             as in REVIEW above.
+         (d) There is no tuple conversion, so (patch, i, j) order is
+             never inferred from position.
+       Smoke test: test/HierarchicalMultiPatchAmr_smoke.py, registered as
+         python_multipatch_amr_smoke_test.  It has the same properties as
+         python_amr_queries_smoke_test: PYTHONPATH set, and skipped on
+         exit 77 when numpy is absent (MEASURED with python3.10).
+         Fixture: p = 2, 2D, two patches:
+           - patch 0 is [0, 2] x [0, 2] in 2 x 2 cells;
+           - patch 1 is [2, 5] x [0, 2] in 3 x 2 cells;
+           - patch 0's S1 is glued to patch 1's S0;
+           - control points sit at the Greville points (affine maps);
+           - marks: level 0 (0, 0, 1) and (1, 2, 0); level 1 (1, 5, 1).
+         The cell counts and marks differ across the patches, so a patch
+         swap or an (i, j) swap changes the results.
+         Checks:
+           - availability, and the struct fields;
+           - the leaves, against a leaf set the test builds from the
+             marks;
+           - the leaf darts equal elements()' darts, once each;
+           - 12 active-id sets (H1 and L2, 2 patches, 3 levels), derived
+             by hand by support containment;
+           - for each (patch, level): the support keys are all ids of
+             the level space, and the supports cover the level's cells;
+           - 5 exact supports, each changed by a patch swap;
+           - the refusal and its message;
+           - IndexError and its message for patch 2 and for level 3 on
+             all three queries, and for a mark outside its patch level;
+           - ValueError for patch 1's geometry shifted by 1e-6;
+           - TypeError for a tuple mark.
+         Result: 1214 checks (counted on a scratch copy), 0 problems.
+       Bypass probes, MEASURED, on SplinesAPI.cpp only.  Each was
+       predicted in writing before any ran, and all came out as
+       predicted.  After each, the source was restored byte-identical
+       (sha1).  The module was rebuilt from the restored source before
+       the suite.
+         P7   Leaf "patch" always 0: 1 failure, the leaves.  P7's first
+              log was not kept, so it was rerun and logged on 2026-11-10.
+         P8   Supports read patch 1 - patch: 17 failures, namely keys
+              and coverage at all 6 (patch, level) and all 5 exact
+              supports.  The IndexError checks still pass, since patch 2
+              wraps to SIZE_MAX, which is still out of range.
+         P9   Active ids read patch 1 - patch: 10 failures, H1 at 4
+              (level 2 is empty on both patches) and L2 at all 6.
+         P10  Shadow removed: 1 failure, the refusal (the inherited
+              method runs instead).
+         P11  l2PatchLevelActiveIds reads H1_ss: 5 failures.  L2 (0, 2)
+              is empty in both spaces.
+         P12  Leaf indices reversed: 1 failure, the leaves.
+       Limits and open points:
+         - The shadow hides the name, not the code.  Calling
+           splines.NavierStokesDiscretization.interiorEdgeSegments(nsd)
+           on a multipatch object still runs the base method.  On the
+           smoke fixture it returned 43 segments (MEASURED 2026-11-10):
+             - all 32 physically adjacent leaf pairs, 30 within a patch
+               and 2 across the interface;
+             - 11 cross-patch pairs that are not adjacent, with boxes
+               taken from each leaf's (patch, level, indices).
+           Endpoints were not checked.  Closing it needs
+           a refusal in the base lambda, for example a dynamic_cast to
+           the multipatch class.  That edits validated code, so it is
+           not done; it is a question for review.  [CLOSED: APPLIED
+           below]
+         - One fixture at one degree (p = 2) in 2D.  Correctness rests
+           on the C++ test: 131 assertions in 10 cases, 4 layouts x
+           p 2, 3.
+         - RuntimeError for a mark that is not a leaf is in the
+           docstring and the C++ test, but not in the smoke test.
+           [ADDED: APPLIED below]
+         - parametricPoint stays patch-local and is not refused (see the
+           audit above).
+         - No multipatch boundary query is bound; item 19 comes first.
+         - StokesFlow, an observation only (read, not edited; 10.8):
+             - ResidualBasedEstimator.py:188 joins leaves on "dart",
+               which is per leaf on multipatch.  Its result records
+               (line 246) carry "level" and "indices" but no "patch".
+             - RefinementUtilities.py:468-471 keys leaves by
+               (level, row, col), so two patches' leaves with equal keys
+               would collide.  It is unreachable today, because of the
+               three-method check at line 459.
+             - Problem_Setup.py:754 counts leaves per level, which works
+               unchanged.
+       Full ctest, one run, 2026-11-10 about 13:23 to 13:26, -j 8, after
+       a full build from the restored source (exit 0, no errors): 265/265
+       pass.  Among them: python_import_test,
+       python_amr_queries_smoke_test, and the new
+       python_multipatch_amr_smoke_test, which passed (not skipped).
+       #30, the macaroni vertices, took 161.50 s.
+
+     REVIEW OF STEP 10.5 SECOND HALF (user, 2026-11-10).
+       Not ready to commit until Q1 is closed: the base-class bypass
+       silently returns wrong data.
+         Q1  Fix it now.
+             - The type check goes at the start of the base binding's
+               lambda and raises NotImplementedError for a
+               NavierStokesHierarchicalMultiPatchDiscretization.
+             - The derived shadow is removed, leaving one refusal path.
+             - Test both call forms, nsd.interiorEdgeSegments() and
+               NavierStokesDiscretization.interiorEdgeSegments(nsd).
+             - Check that a single-patch object still works, so an
+               over-broad guard is caught.
+             - Probe by deleting the guard.
+             A dynamic_cast in the lambda is right: this is a
+             Python-only capability check, and a virtual C++ interface
+             for a temporary refusal would be needless.  A
+             topology-aware implementation can replace the refusal
+             later.
+         Q2  Distinct method names and no
+             hierarchicalRefinementDiagnostics: approved.  Keeping
+             activeLeafElementInfo is right, since "patch" adds to the
+             record without changing its meaning.
+         Q3  No tuple conversion: approved.  StokesFlow builds the
+             records when its multipatch integration is added.
+         Q4  Add RuntimeError smoke coverage: a repeated or non-leaf
+             mark, asserting RuntimeError and its message.  It tests
+             Python exception translation, which the C++ test cannot.
+       StokesFlow is correctly deferred to 10.8.  That step must carry
+       "patch" into the estimator output and key refinement by
+       (patch, level, row, column).
+       Then rerun both smoke tests and the full suite.
+
+     APPLIED 2026-11-10.
+       1. SplinesAPI.cpp: the base interiorEdgeSegments lambda now
+          begins with a dynamic_cast to
+          NavierStokesHierarchicalMultiPatchDiscretization.  When the
+          cast succeeds, it raises NotImplementedError with the message
+          the shadow used.  The base docstring says so, and the derived
+          shadow is removed.
+       2. The smoke test (HierarchicalMultiPatchAmr_smoke.py):
+            - checks both call forms against the exact refusal; a
+              failure prints what the call did instead;
+            - adds a single-patch control: patch 1's geometry alone, as
+              a NavierStokesHierarchicalDiscretization with marks
+              (2, 0) then (5, 1), must return a list of 20 segments.
+              The 20 edge-sharing leaf pairs were counted by hand
+              before the run, one segment each.  By level pair:
+              L0-L0 5, L0-L1 3, L0-L2 2, L1-L1 2, L1-L2 4, L2-L2 4;
+            - checks RuntimeError "Asked to refine an element that
+              isn't active" for a repeated level 0 mark (patch 0,
+              (0, 1) twice) and for a level 1 mark under an unrefined
+              parent (patch 0, (0, 0)).
+          It now runs 1218 checks (counted on a scratch copy).
+          HierarchicalAmrQueries_smoke.py is unchanged.
+       Bypass probes, MEASURED.  Both were predicted in writing before
+       the edit and came out as predicted.  After each, the source was
+       restored byte-identical (sha1); then the module was rebuilt and
+       both smoke tests passed.
+         P13  Guard disabled (if( false )): 2 failures, both call
+              forms, each "returned list of 43".
+         P14  Guard refuses every object (if( true )): 1 failure, the
+              single-patch control.
+       P10 (shadow removed) no longer applies, since there is no
+       shadow.  The RuntimeError checks are not probed: the binding
+       holds no code for them, so only pybind's translation is under
+       test.
+       Result, MEASURED: both smoke tests report 0 problems.
+       Full ctest, one run, 2026-11-10 17:23:38 to 17:25:34, -j 8, after
+       a full build from the restored source (exit 0, no errors): 265/265
+       pass.  Among them: python_import_test,
+       python_amr_queries_smoke_test, and
+       python_multipatch_amr_smoke_test, which passed (not skipped).
+       #30, the macaroni vertices, took 115.11 s.
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces

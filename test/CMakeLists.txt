@@ -93,3 +93,12 @@ add_test(
 set_tests_properties( python_amr_queries_smoke_test PROPERTIES
     ENVIRONMENT PYTHONPATH=${CMAKE_BINARY_DIR}/src/api
     SKIP_RETURN_CODE 77 )
+
+add_test(
+    NAME python_multipatch_amr_smoke_test
+    COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/HierarchicalMultiPatchAmr_smoke.py
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/src/api
+)
+set_tests_properties( python_multipatch_amr_smoke_test PROPERTIES
+    ENVIRONMENT PYTHONPATH=${CMAKE_BINARY_DIR}/src/api
+    SKIP_RETURN_CODE 77 )

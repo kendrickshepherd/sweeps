@@ -102,6 +102,16 @@ namespace
         }
         return out;
     }
+
+    std::vector<size_t> patchLevelActiveIds( const basis::HierarchicalMultiPatchSplineSpace& ss,
+                                             const size_t patch,
+                                             const size_t level )
+    {
+        std::vector<size_t> out;
+        for( const basis::FunctionId& fid : basis::patchLevelActiveFunctions( ss, patch, level ) )
+            out.push_back( static_cast<size_t>( fid.id() ) );
+        return out;
+    }
 }
 
 PYBIND11_MODULE( splines, m )
@@ -305,6 +315,13 @@ PYBIND11_MODULE( splines, m )
         .def(
             "interiorEdgeSegments",
             []( const api::NavierStokesDiscretization& nsd ) {
+                if( dynamic_cast<const api::NavierStokesHierarchicalMultiPatchDiscretization*>( &nsd ) != nullptr )
+                {
+                    py::set_error( PyExc_NotImplementedError,
+                                   "interiorEdgeSegments compares parametric coordinates as if all patches shared one "
+                                   "chart; it is not implemented for multipatch discretizations." );
+                    throw py::error_already_set();
+                }
                 const param::ParametricAtlas& atlas =
                     nsd.getH1().splineSpace().basisComplex().parametricAtlas();
 
@@ -377,7 +394,8 @@ PYBIND11_MODULE( splines, m )
                 }
                 return segments;
             },
-            "Returns every active interior edge segment, its two elements, and its element-local endpoints." )
+            "Returns every active interior edge segment, its two elements, and its element-local endpoints. Raises "
+            "NotImplementedError for a multipatch discretization." )
         .def(
             "localizeElement",
             []( api::NavierStokesDiscretization& nsd, const topology::Face& elem ) {
@@ -1024,6 +1042,105 @@ PYBIND11_MODULE( splines, m )
         .def_property_readonly( "weights",
                                 &api::NURBSAdaptiveLocalNavierStokesHierarchicalDiscretization::weights,
                                 "The rational geometry weights." );
+
+    py::class_<api::PatchGeometry>( m, "PatchGeometry" )
+        .def( py::init<const basis::KnotVector&,
+                       const basis::KnotVector&,
+                       const size_t,
+                       const size_t,
+                       const Eigen::MatrixXd&>(),
+              "One patch of a multipatch discretization: its unrefined knot vectors and degrees, and control points "
+              "with one column per function of the unrefined patch space.",
+              "knot_vec_s"_a,
+              "knot_vec_t"_a,
+              "degree_s"_a,
+              "degree_t"_a,
+              "control_points"_a )
+        .def_readonly( "knot_vec_s", &api::PatchGeometry::kv_s )
+        .def_readonly( "knot_vec_t", &api::PatchGeometry::kv_t )
+        .def_readonly( "degree_s", &api::PatchGeometry::degree_s )
+        .def_readonly( "degree_t", &api::PatchGeometry::degree_t )
+        .def_readonly( "control_points", &api::PatchGeometry::control_points );
+
+    py::class_<api::PatchSideRef>( m, "PatchSideRef" )
+        .def( py::init<const size_t, const api::PatchSide>(), "One side of one patch.", "patch"_a, "side"_a )
+        .def_readonly( "patch", &api::PatchSideRef::patch )
+        .def_readonly( "side", &api::PatchSideRef::side );
+
+    py::class_<api::PatchElement>( m, "PatchElement" )
+        .def( py::init<const size_t, const size_t, const size_t>(),
+              "Patch-local tensor element indices ( i, j ) on one level.",
+              "patch"_a,
+              "i"_a,
+              "j"_a )
+        .def_readonly( "patch", &api::PatchElement::patch )
+        .def_readonly( "i", &api::PatchElement::i )
+        .def_readonly( "j", &api::PatchElement::j );
+
+    py::class_<api::NavierStokesHierarchicalMultiPatchDiscretization, api::NavierStokesDiscretization>(
+        m, "NavierStokesHierarchicalMultiPatchDiscretization" )
+        .def( py::init<const std::vector<api::PatchGeometry>&,
+                       const std::vector<std::pair<api::PatchSideRef, api::PatchSideRef>>&,
+                       const std::vector<std::vector<api::PatchElement>>&>(),
+              "Create a 2d hierarchical multipatch discretization for Navier Stokes problems: H1, HDiv and L2 spline "
+              "spaces as in NavierStokesHierarchicalDiscretization, on patches glued side to side. Level l + 1 is the "
+              "dyadic refinement of level l on every patch. elems_to_refine[l] lists the level l leaves to refine. "
+              "Raises IndexError for a patch or element outside the discretization, RuntimeError for an element to "
+              "refine that is not a leaf, and ValueError for malformed gluing or geometry, or patch geometries that "
+              "disagree on a shared H1 coefficient.",
+              "patches"_a,
+              "gluing"_a,
+              "elems_to_refine"_a )
+        .def(
+            "activeLeafElementInfo",
+            []( const api::NavierStokesHierarchicalMultiPatchDiscretization& nsd ) {
+                py::list out;
+                for( const topology::MultiPatchLeafElementInfo& leaf :
+                     topology::leafElementInfos( nsd.H1_ss.basisComplex().parametricAtlas().cmap() ) )
+                {
+                    py::dict info;
+                    info["dart"] = leaf.leaf.dart().id();
+                    info["patch"] = leaf.patch;
+                    info["level"] = leaf.level;
+                    info["indices"] = py::make_tuple( leaf.indices.at( 0 ), leaf.indices.at( 1 ) );
+                    out.append( info );
+                }
+                return out;
+            },
+            "Return the dart id, patch, hierarchy level, and level-local, patch-local tensor indices for every active "
+            "leaf element." )
+        .def(
+            "h1PatchLevelActiveIds",
+            []( const api::NavierStokesHierarchicalMultiPatchDiscretization& nsd, const size_t patch, const size_t level ) {
+                return patchLevelActiveIds( nsd.H1_ss, patch, level );
+            },
+            "patch"_a,
+            "level"_a,
+            "Return the active H1 function ids of one patch on one refinement level, ascending, as ids of that patch's "
+            "level space." )
+        .def(
+            "l2PatchLevelActiveIds",
+            []( const api::NavierStokesHierarchicalMultiPatchDiscretization& nsd, const size_t patch, const size_t level ) {
+                return patchLevelActiveIds( nsd.L2_ss, patch, level );
+            },
+            "patch"_a,
+            "level"_a,
+            "Return the active L2 function ids of one patch on one refinement level, ascending, as ids of that patch's "
+            "level space." )
+        .def(
+            "l2PatchLevelSupports",
+            []( const api::NavierStokesHierarchicalMultiPatchDiscretization& nsd, const size_t patch, const size_t level ) {
+                const auto cell_supports = basis::patchLevelTensorCellSupports( nsd.L2_ss, patch, level );
+                std::map<size_t, std::vector<std::pair<size_t, size_t>>> supports;
+                for( size_t fid = 0; fid < cell_supports.size(); fid++ )
+                    for( const auto& indices : cell_supports.at( fid ) )
+                        supports[fid].emplace_back( indices.at( 0 ), indices.at( 1 ) );
+                return supports;
+            },
+            "patch"_a,
+            "level"_a,
+            "Return tensor-cell supports of all L2 functions of one patch on one refinement level, keyed by the ids of "
+            "that patch's level space; l2PatchLevelActiveIds selects the active ones." );
 
     m.def(
         "grevillePoints",
