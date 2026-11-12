@@ -4,6 +4,7 @@
 #include <CombinatorialMapBoundary.hpp>
 #include <VectorConformingHierarchicalTPSplineSpace.hpp>
 #include <VectorConformingHierarchicalMultiPatchSplineSpace.hpp>
+#include <HierarchicalTPCombinatorialMap.hpp>
 #include <IndexOperations.hpp>
 
 namespace api
@@ -108,6 +109,23 @@ namespace api
         T0,
         T1
     };
+
+    /// @brief The edges of a 2d tensor-product map on one side of the patch, in order along the side.
+    /// An upper side fixes the last dart of the map perpendicular to it: the source map for S1, the line map for T1.
+    /// @throws std::invalid_argument if the map is not 2d or side is not a PatchSide value.
+    std::vector<topology::Edge> patchSideEdges( const topology::TPCombinatorialMap& cmap, const PatchSide side );
+
+    /// @brief The leaf edges of a 2d hierarchical map on one side of the patch: the leaf descendants of each
+    /// level 0 side edge.
+    /// @throws std::invalid_argument as the tensor-product overload does for the level 0 map.
+    std::vector<topology::Edge> patchSideEdges( const topology::HierarchicalTPCombinatorialMap& cmap,
+                                                const PatchSide side );
+
+    /// @brief The lowest dart id of the element of each patchSideEdges edge, in the same order.
+    std::vector<topology::Dart::IndexType> patchSideElementDarts( const topology::TPCombinatorialMap& cmap,
+                                                                  const PatchSide side );
+    std::vector<topology::Dart::IndexType> patchSideElementDarts( const topology::HierarchicalTPCombinatorialMap& cmap,
+                                                                  const PatchSide side );
 
     class NavierStokesHierarchicalDiscretization : public NavierStokesDiscretization
     {

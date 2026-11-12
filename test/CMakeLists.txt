@@ -63,6 +63,8 @@ add_my_test(HierarchicalAmrQueries_test)
 target_link_libraries( HierarchicalAmrQueries_test PRIVATE discretization )
 add_my_test(HierarchicalMultiPatchAmr_test)
 target_link_libraries( HierarchicalMultiPatchAmr_test PRIVATE discretization )
+add_my_test(PatchSideEdges_test)
+target_link_libraries( PatchSideEdges_test PRIVATE discretization )
 add_my_test(HierarchicalMultiPatchCMap_test)
 add_my_test(HierarchicalMultiPatchSplineSpace_test)
 add_my_test(FitToFoliation_test)
@@ -100,5 +102,14 @@ add_test(
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/src/api
 )
 set_tests_properties( python_multipatch_amr_smoke_test PROPERTIES
+    ENVIRONMENT PYTHONPATH=${CMAKE_BINARY_DIR}/src/api
+    SKIP_RETURN_CODE 77 )
+
+add_test(
+    NAME python_patch_side_bindings_smoke_test
+    COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/PatchSideBindings_smoke.py
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/src/api
+)
+set_tests_properties( python_patch_side_bindings_smoke_test PROPERTIES
     ENVIRONMENT PYTHONPATH=${CMAKE_BINARY_DIR}/src/api
     SKIP_RETURN_CODE 77 )

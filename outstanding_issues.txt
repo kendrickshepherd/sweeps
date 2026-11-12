@@ -1016,7 +1016,8 @@ MEDIUM PRIORITY — Architectural / Correctness
         done 2026-11-06 (their bindings call them), committed d0d1adc; 10.5
         first half done 2026-11-06, reviewed, committed 1c214e1; second
         half (bindings) done 2026-11-10, reviewed and corrections applied
-        the same day, awaiting commit; STEP 10 below]
+        the same day, committed a4258b4; item 19 done 2026-11-11, awaiting
+        its own commit before 10.6; STEP 10 below]
    STEP 2 RESULT (2026-10-20).  Which exception each current rejection
    reaches, MEASURED by mutation probe: each of validateMatchingInterfaces'
    two throws in turn was changed to std::runtime_error, the three binaries
@@ -2752,7 +2753,7 @@ MEDIUM PRIORITY — Architectural / Correctness
              cross-check only.  2D first, as StokesFlow is.
              [FIRST HALF DONE 2026-11-06, committed 1c214e1; SECOND
              HALF DONE 2026-11-10, reviewed and corrections applied the
-             same day, awaiting commit: STEP 10.5 below]
+             same day, committed a4258b4: STEP 10.5 below]
        10.6  NFormSupportPolicy validator, opt-in (D2, D3): C++ with a
              binding, over the whole hierarchy, patch by patch; it reports
              the first failure by (patch, level, cell) and throws for
@@ -3142,7 +3143,7 @@ MEDIUM PRIORITY — Architectural / Correctness
            itself is sensible and NaN-safe.
          - The T1 maxDartId finding is a separate issue (item 19), not
            part of 10.5, resolved before StokesFlow relies on the
-           boundary APIs.
+           boundary APIs.  [DONE 2026-11-11: item 19]
        Ready to commit after the documentation fix, P4 hardening, the
        tolerance pin, the refusal plan and a green full suite.
 
@@ -3410,6 +3411,7 @@ MEDIUM PRIORITY — Architectural / Correctness
        python_amr_queries_smoke_test, and
        python_multipatch_amr_smoke_test, which passed (not skipped).
        #30, the macaroni vertices, took 115.11 s.
+       [COMMITTED a4258b4]
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces
@@ -4103,14 +4105,16 @@ BLOCKING ITEM 1 STEP 6 — Found 2026-10-20, reviewed 2026-10-21
 
 
 19. T1 Boundary Edges Use sourceCMap().maxDartId() For The Line Dart
-    File(s): src/api/SplinesAPI.cpp  tpBoundaryEdges() (line 42),
+    File(s): formerly src/api/SplinesAPI.cpp  tpBoundaryEdges() (line 42),
              hierarchicalBoundaryEdges() (line 92), and the in-class
              "boundaryEdges" lambdas of the TP (line 538) and hierarchical
-             (line 855) bindings
+             (line 855) bindings; now src/api/NavierStokesDiscretization.cpp
+             api::patchSideEdges() and api::patchSideElementDarts()
 
-    Status: ARGUED-FROM-CODE, unprobed, unreproduced.  Found during step
-    10.5's first half; recorded separately by the review (2026-11-06), not
-    part of 10.5.
+    Status: FIXED 2026-11-11, MEASURED: reproduced on a4258b4, then tested
+    and probed on the fix.  Awaiting its own commit, before 10.6.  Found
+    during step 10.5's first half; recorded separately by the review
+    (2026-11-06), not part of 10.5.
 
     FINDING.  For side T1 each site builds line_dart from
     sourceCMap().maxDartId(), where lineCMap().maxDartId() looks intended.
@@ -4126,3 +4130,161 @@ BLOCKING ITEM 1 STEP 6 — Found 2026-10-20, reviewed 2026-10-21
          each must be shown reached.
       3. A separate commit, before StokesFlow integration relies on the
          boundary APIs.
+      [SUPERSEDED 2026-11-11 by the RULING below, except item 3]
+
+    RULING (user, 2026-11-11).  Do not fix the four sites in place.  The
+    duplicated bug is evidence that the selection does not belong in
+    SplinesAPI.cpp, and fixing it there would knowingly break Q11
+    (bindings only marshal).  Move the smallest coherent boundary edge
+    selection into native C++, owned by one function.  Test it directly
+    with Catch2 on rectangular meshes (n_s != n_t), every side, all four
+    former call paths, with a square control, which would otherwise mask
+    the defect.  Python tests only for binding shape, output and exception
+    translation.  All four bindings call the native function without
+    repeating the selection; the Python API is preserved.  A separate
+    commit before 10.6.
+
+    REPRODUCTION (2026-11-11, MEASURED on unmodified a4258b4 from Python,
+    degree 2 on unit cells, predictions written first, all confirmed).
+      - TP 2 x 4, T1: edges [10, 14], element darts [8, 12], the top edges
+        of row 1, not of row 3 ([26, 30], [24, 28]).
+      - TP 4 x 2, T1: edges [50, 54, 58, 62], past the map's last dart
+        (31); element darts [48, 52, 56, 60]; no exception.
+      - Hierarchical 2 x 3, marks L0 (1, 2), (0, 0) and L1 (3, 5), T1:
+        edges [10, 86, 82], element darts [9, 12, 12] (one element twice),
+        all on t = 2.
+      - Hierarchical 3 x 2, marks L0 (2, 1), (0, 0) and L1 (5, 3), T1:
+        both methods raise RuntimeError "No descendant leaf dart found".
+      - The square controls (TP and hierarchical 3 x 3, marks L0 (2, 2),
+        (0, 0) and L1 (5, 5)) and every S0, S1 and T0 query: correct.
+      - PatchSide(7) constructs, and all four methods return [].
+      The first run also flagged hierarchical S0.  That was the script's
+      error: it required the element's lowest dart at position 0, but a
+      coarse leaf whose bottom edge is subdivided by a refined neighbor
+      has lowest dart 9 (H 2 x 3 S0), not 8.  The check was changed to
+      compare (level, i, j) only.
+
+    FIX (2026-11-11).  src/api/NavierStokesDiscretization.{hpp,cpp}:
+      - api::patchSideEdges( const TPCombinatorialMap&, PatchSide ) owns
+        the selection.  An s side fixes a source dart and runs along the
+        line map; a t side fixes a line dart and runs along the source
+        map; an upper side fixes the last dart of its fixed map.  The T1
+        line dart now comes from lineCMap().maxDartId().  Edges are in
+        order along the side.
+      - api::patchSideEdges( const HierarchicalTPCombinatorialMap&,
+        PatchSide ): the leaf descendants of each level 0 side edge of the
+        tensor-product overload.  No order is claimed: within one base
+        edge the leaves need not be monotone along the side (MEASURED:
+        H 2 x 3 S0 is [43, 27, 11, 19], on t [0.5, 1], [0, 0.5], [1, 2],
+        [2, 3]).
+      - api::patchSideElementDarts, for both maps: the lowest dart id of
+        the element of each patchSideEdges edge, in the same order.
+      - SplinesAPI.cpp: tpBoundaryEdges, hierarchicalBoundaryEdges and the
+        in-class copies deleted.  The four bindings, boundaryEdges(side)
+        and boundaryElementDarts(side) on NavierStokesTPDiscretization and
+        NavierStokesHierarchicalDiscretization, call the native functions
+        and only convert.  No maxDartId remains in SplinesAPI.cpp.
+      Python API: names and signatures unchanged (boundaryElementDarts
+      still -> list); docstrings MEASURED identical before and after, and
+      no changed line of SplinesAPI.cpp holds a string literal.
+      MEASURED unchanged against the reproduction: every S0, S1 and T0
+      output and the square T1 outputs.  Rectangular T1 outputs change;
+      that is the fix (TP 4 x 2 T1 is now [18, 22, 26, 30] and
+      [16, 20, 24, 28]; H 2 x 3 T1 is [18, 502, 498, 114] and
+      [16, 500, 496, 112]; H 3 x 2 T1 is [14, 18, 502, 498, 114] and
+      [13, 16, 500, 496, 112]).
+      CONTRACT CHANGES (not mechanical):
+        - A PatchSide outside S0..T1 (Python: PatchSide(7)) throws
+          std::invalid_argument "Unknown patch side." (ValueError), where
+          all four methods returned [].
+        - A map that is not 2d throws std::invalid_argument "Patch sides
+          are defined only for 2d tensor-product maps.".  Unreachable from
+          the bindings, whose discretizations are 2d; tested directly.
+
+    TESTS.
+      - test/PatchSideEdges_test.cpp, Catch2, 3 cases, 40 assertions.
+        Meshes 2 x 3, 3 x 2 and 3 x 3 (square control), degree 2 on unit
+        cells, each as a TP discretization and as a hierarchical one with
+        the reproduction's marks: two opposite corners, then a corner
+        child, so every side has leaves on two or three levels.  REQUIRE
+        that each level 0 source map has n_s cells and each line map n_t;
+        on the rectangular meshes that establishes the source map is s.
+        Oracle, per side and entry point, from the parametric atlas
+        (parametricStarts, parametricLengths, parentPoint), never from
+        dart arithmetic: each edge is a dart of the map (a leaf dart for
+        hierarchical), has no phi_2, and both of its end points lie on the
+        side's line; the intervals the edges cover along the side are
+        those of the leaves on the side, built from the marks by the test.
+        Each element dart is a dart of the map, its element's lowest dart,
+        on the box of an expected leaf, and the element of the edge at the
+        same position.  TP in order; hierarchical as multisets.  The
+        coordinates are dyadic and compared exactly.  Each entry point is
+        caught per mesh and side, so a throw cannot hide another result.
+        An unknown side on all four entry points.  3d: a 1 x 1 x 2 TP map
+        and a one level hierarchical map over it, every side, both entry
+        points.
+      - test/PatchSideBindings_smoke.py, registered as
+        python_patch_side_bindings_smoke_test: shape (a nonempty list of
+        Edge, a list of int, equal lengths) on every side of a TP 2 x 4 and
+        a hierarchical 3 x 2 discretization (the 3 x 2 marks above); the
+        hand-derived T1 values (TP [26, 30] and [24, 28] in order;
+        hierarchical {14, 18, 114, 498, 502} and {13, 16, 112, 496, 500}
+        sorted); ValueError "Unknown patch side." from all four methods.
+
+    PROBES (2026-11-11, predictions written first).  Each edited only
+    NavierStokesDiscretization.cpp, rebuilt PatchSideEdges_test and the
+    module, ran both tests, and restored the file byte-identical (sha1
+    93c3f9a, checked after each).
+      A  T1's fixed map back to sourceCMap(): 4 of case 1's 6 CHECKs fail
+         (TP 2 x 3: 5 problems, row 1's top edges, interior and off the
+         side, and row 1's elements; TP 3 x 2: 8, darts not in the map;
+         H 2 x 3: 8, the same darts as on a4258b4; H 3 x 2: both entry
+         points threw "No descendant leaf dart found", caught); both
+         square controls pass; 36/40.
+         Smoke: 4 problems, both TP 2 x 4 T1 values wrong and both
+         hierarchical 3 x 2 T1 calls raised RuntimeError, so all four
+         bindings reach the native selection.  As predicted.
+      B  Leaf expansion skipped (level 0 side darts returned as they
+         are): the 3 hierarchical CHECKs fail, every side returning a
+         non-leaf level 0 dart, and every patchSideElementDarts call threw
+         "Phi 1 operation unfound!" (caught); TP passes; 37/40.  As
+         predicted.  Smoke: 5 problems, the wrong hierarchical 3 x 2 T1
+         edges and the four boundaryElementDarts calls, which raised
+         RuntimeError "Phi 1 operation unfound!".  The prediction named
+         only the T1 exact values and no exception; the miss is in the
+         prediction.
+      C  The unknown-side throw replaced by return DartPos0: the 4
+         unknown-side CHECKs fail ("returned"); 36/40; smoke 4 problems.
+         As predicted.  The first edit text also matched sideId()'s throw
+         in the multipatch gluing code; that run stopped before editing
+         (sha unchanged) and the edit was retargeted.
+      D  The dim guard deleted: all 16 3d CHECKs fail ("returned"), TP
+         and hierarchical; 24/40; smoke clean.  As predicted.
+
+    SUITE.  Full build (exit 0, no errors or warnings), then ctest -j 8,
+    one run ending 2026-11-11 17:37:26, 134.57 s: 269/269 pass.  The four
+    new tests (the three PatchSideEdges_test cases and
+    python_patch_side_bindings_smoke_test) passed, not skipped.
+
+    NOTE.  sideId() in the same file is a second switch over PatchSide.
+    It maps a side to an ElementSide id for the multipatch gluing and
+    selects no edges, so it is not a copy of this selection.
+
+
+20. tensorProductVertexPositions Places 2d Corners By id % 8, Not id % 4
+    File(s): src/topology/TPCombinatorialMap.cpp
+             tensorProductVertexPositions(), 2d branch (line 606)
+
+    Status: ARGUED-FROM-CODE, unprobed, unreproduced.  Found 2026-11-11
+    while choosing item 19's test oracle; not fixed, and not used by that
+    test.  No caller in src or test (grep, 2026-11-11).
+
+    FINDING.  The 2d branch picks a vertex's corner of its element by
+    switch( v.dart().id() % 8 ), cases 1 to 3.  A 2d element has 4 darts,
+    pos + 4 (i + n_s j), so the position is id % 4.  For an element with
+    odd i + n_s j, id % 8 is 4 to 7, the switch takes default, and each
+    vertex would be placed at the element's low corner.  The 3d branch
+    (line 538) uses id % 24, which matches its 24 darts per element.
+
+    Not scheduled.  Until it is fixed and tested, do not use it as an
+    oracle.

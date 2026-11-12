@@ -278,6 +278,74 @@ namespace api
           Geometry( H1_ss, 3 )
     {}
 
+    std::vector<topology::Edge> patchSideEdges( const topology::TPCombinatorialMap& cmap, const PatchSide side )
+    {
+        using TPDartPos = topology::TPCombinatorialMap::TPDartPos;
+        if( cmap.dim() != 2 ) throw std::invalid_argument( "Patch sides are defined only for 2d tensor-product maps." );
+        const TPDartPos pos = [&] {
+            switch( side )
+            {
+                case PatchSide::S0: return TPDartPos::DartPos3;
+                case PatchSide::S1: return TPDartPos::DartPos1;
+                case PatchSide::T0: return TPDartPos::DartPos0;
+                case PatchSide::T1: return TPDartPos::DartPos2;
+            }
+            throw std::invalid_argument( "Unknown patch side." );
+        }();
+
+        // An s side fixes a source dart and runs along the line map; a t side fixes a line dart.
+        const bool s_side = side == PatchSide::S0 or side == PatchSide::S1;
+        const topology::CombinatorialMap& fixed_map = s_side ? cmap.sourceCMap() : cmap.lineCMap();
+        const topology::CombinatorialMap& along_map = s_side ? cmap.lineCMap() : cmap.sourceCMap();
+        const topology::Dart fixed( side == PatchSide::S1 or side == PatchSide::T1 ? fixed_map.maxDartId() : 0 );
+
+        std::vector<topology::Edge> out;
+        out.reserve( topology::cellCount( along_map, 1 ) );
+        topology::iterateDartsWhile( along_map, [&]( const topology::Dart& along ) {
+            out.push_back( s_side ? cmap.flatten( fixed, along, pos ) : cmap.flatten( along, fixed, pos ) );
+            return true;
+        } );
+        return out;
+    }
+
+    std::vector<topology::Edge> patchSideEdges( const topology::HierarchicalTPCombinatorialMap& cmap,
+                                                const PatchSide side )
+    {
+        std::vector<topology::Edge> out;
+        for( const topology::Edge& base_edge : patchSideEdges( *cmap.refinementLevels().front(), side ) )
+            cmap.iterateLeafDescendants( cmap.dartRanges().toGlobalDart( 0, base_edge.dart() ),
+                                         [&]( const topology::Dart& leaf_d ) {
+                                             out.push_back( topology::Edge( leaf_d ) );
+                                             return true;
+                                         } );
+        return out;
+    }
+
+    namespace
+    {
+        std::vector<topology::Dart::IndexType> elementDarts( const topology::CombinatorialMap& cmap,
+                                                             const std::vector<topology::Edge>& edges )
+        {
+            std::vector<topology::Dart::IndexType> out;
+            out.reserve( edges.size() );
+            for( const topology::Edge& edge : edges )
+                out.push_back( topology::lowestDartId( cmap, topology::Face( edge.dart() ) ) );
+            return out;
+        }
+    } // namespace
+
+    std::vector<topology::Dart::IndexType> patchSideElementDarts( const topology::TPCombinatorialMap& cmap,
+                                                                  const PatchSide side )
+    {
+        return elementDarts( cmap, patchSideEdges( cmap, side ) );
+    }
+
+    std::vector<topology::Dart::IndexType> patchSideElementDarts( const topology::HierarchicalTPCombinatorialMap& cmap,
+                                                                  const PatchSide side )
+    {
+        return elementDarts( cmap, patchSideEdges( cmap, side ) );
+    }
+
     namespace
     {
         using InternalConnectionsMap = topology::MultiPatchCombinatorialMap::InternalConnectionsMap;
