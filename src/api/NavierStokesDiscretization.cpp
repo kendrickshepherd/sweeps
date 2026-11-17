@@ -281,7 +281,7 @@ namespace api
     std::vector<topology::Edge> patchSideEdges( const topology::TPCombinatorialMap& cmap, const PatchSide side )
     {
         using TPDartPos = topology::TPCombinatorialMap::TPDartPos;
-        if( cmap.dim() != 2 ) throw std::invalid_argument( "Patch sides are defined only for 2d tensor-product maps." );
+        if( cmap.dim() != 2 ) throw std::invalid_argument( "patchSideEdges supports only 2d tensor-product maps." );
         const TPDartPos pos = [&] {
             switch( side )
             {

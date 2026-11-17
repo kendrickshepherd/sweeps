@@ -350,7 +350,7 @@ TEST_CASE( "A 3d map has no patch sides" )
     REQUIRE( volume->dim() == 3 );
     REQUIRE( h_volume.dim() == 3 );
 
-    const std::string expected = "invalid_argument: Patch sides are defined only for 2d tensor-product maps.";
+    const std::string expected = "invalid_argument: patchSideEdges supports only 2d tensor-product maps.";
     for( const Side& side : sides )
     {
         INFO( side.name );

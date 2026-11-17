@@ -1017,7 +1017,7 @@ MEDIUM PRIORITY — Architectural / Correctness
         first half done 2026-11-06, reviewed, committed 1c214e1; second
         half (bindings) done 2026-11-10, reviewed and corrections applied
         the same day, committed a4258b4; item 19 done 2026-11-11, awaiting
-        its own commit before 10.6; STEP 10 below]
+        its own commit before 10.6, committed f171434; STEP 10 below]
    STEP 2 RESULT (2026-10-20).  Which exception each current rejection
    reaches, MEASURED by mutation probe: each of validateMatchingInterfaces'
    two throws in turn was changed to std::runtime_error, the three binaries
@@ -2713,6 +2713,8 @@ MEDIUM PRIORITY — Architectural / Correctness
          exception, and which Python exception an unsupported policy
          raises (pybind11 maps std::runtime_error to RuntimeError;
          NotImplementedError needs a registered translator).
+         RESOLVED 2026-11-12 (the user): an unsupported policy raises
+         NotImplementedError.  Still open: the form of a P_n failure.
      SUB-SEQUENCE, revised 2026-11-05.  Each item a separate commit and a
        half-way stop, as before.
        10.1  Documentation.  [DONE; revised 2026-11-05]
@@ -4112,9 +4114,10 @@ BLOCKING ITEM 1 STEP 6 — Found 2026-10-20, reviewed 2026-10-21
              api::patchSideEdges() and api::patchSideElementDarts()
 
     Status: FIXED 2026-11-11, MEASURED: reproduced on a4258b4, then tested
-    and probed on the fix.  Awaiting its own commit, before 10.6.  Found
-    during step 10.5's first half; recorded separately by the review
-    (2026-11-06), not part of 10.5.
+    and probed on the fix.  Committed f171434.  Reviewed 2026-11-12: one
+    message correction, awaiting commit (REVIEW below).  Found during step
+    10.5's first half; recorded separately by the review (2026-11-06), not
+    part of 10.5.
 
     FINDING.  For side T1 each site builds line_dart from
     sourceCMap().maxDartId(), where lineCMap().maxDartId() looks intended.
@@ -4197,9 +4200,10 @@ BLOCKING ITEM 1 STEP 6 — Found 2026-10-20, reviewed 2026-10-21
         - A PatchSide outside S0..T1 (Python: PatchSide(7)) throws
           std::invalid_argument "Unknown patch side." (ValueError), where
           all four methods returned [].
-        - A map that is not 2d throws std::invalid_argument "Patch sides
-          are defined only for 2d tensor-product maps.".  Unreachable from
-          the bindings, whose discretizations are 2d; tested directly.
+        - A map that is not 2d throws std::invalid_argument
+          "patchSideEdges supports only 2d tensor-product maps." (wording
+          of 2026-11-12, REVIEW below).  Unreachable from the bindings,
+          whose discretizations are 2d; tested directly.
 
     TESTS.
       - test/PatchSideEdges_test.cpp, Catch2, 3 cases, 40 assertions.
@@ -4270,6 +4274,23 @@ BLOCKING ITEM 1 STEP 6 — Found 2026-10-20, reviewed 2026-10-21
     It maps a side to an ElementSide id for the multipatch gluing and
     selects no edges, so it is not a copy of this selection.
 
+    REVIEW (2026-11-12, after f171434).  Independently confirmed: the
+    Catch2 cases (40 assertions, 3 cases), the smoke test, git diff
+    --check, the four bindings only marshal, and the coverage.  Approved:
+    an unknown PatchSide throws; 3d is rejected, since the enum has only s
+    and t sides; the tensor-product order is adequately measured; the
+    hierarchical order stays unspecified; sideId() stays; item 20 stays
+    unconfirmed and outside this change.  Correction: 3d patches have
+    sides too, and it is this API that is 2d only, so the dim guard's
+    message "Patch sides are defined only for 2d tensor-product maps."
+    became "patchSideEdges supports only 2d tensor-product maps.", in
+    NavierStokesDiscretization.cpp and case 3 of PatchSideEdges_test.cpp.
+    The message names patchSideEdges also when patchSideElementDarts or
+    the hierarchical overload is the entry point, since each rejects
+    through it.  String only: PatchSideEdges_test rebuilt (no warnings)
+    and rerun 2026-11-12, 40 assertions in 3 cases pass; no full suite
+    (the review's instruction).  Follow-up: item 21.
+
 
 20. tensorProductVertexPositions Places 2d Corners By id % 8, Not id % 4
     File(s): src/topology/TPCombinatorialMap.cpp
@@ -4288,3 +4309,28 @@ BLOCKING ITEM 1 STEP 6 — Found 2026-10-20, reviewed 2026-10-21
 
     Not scheduled.  Until it is fixed and tested, do not use it as an
     oracle.
+
+
+21. boundaryPerpendicularHDivFuncs Falls Off Its Side Switch For An Invalid
+    PatchSide
+    File(s): src/api/SplinesAPI.cpp  the "boundaryPerpendicularHDivFuncs"
+             bindings of NavierStokesTPDiscretization (line 455, switch in
+             the iter_dir lambda) and NavierStokesHierarchicalDiscretization
+             (line 713, switch in get_iter_dir)
+
+    Status: ARGUED-FROM-CODE, unprobed (a probe would run undefined
+    behavior, which shows nothing reliably).  Found by the item 19 review
+    (2026-11-12); confirmed by reading at f171434.  Nonblocking, not
+    scheduled.
+
+    FINDING.  Both lambdas return a SmallVector from a switch over the
+    four PatchSide values with no default and no return after it.
+    Python can construct PatchSide(7) (item 19, REPRODUCTION), and for it
+    control falls off the end of a value-returning lambda: undefined
+    behavior.  Also, is_S is false for it, so the binding first selects
+    the t component.  The same side logic sits in a binding, against Q11.
+
+    PLAN.  The item 19 treatment: a native query owning the side to
+    function selection, an invalid side throwing std::invalid_argument
+    (ValueError), Catch2 on rectangular meshes with a square control,
+    and a smoke test for shape and translation only.
