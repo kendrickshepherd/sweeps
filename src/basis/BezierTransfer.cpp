@@ -29,11 +29,18 @@ namespace basis
 
     std::vector<LocalExtraction> localExtractions( const KnotVector& kv, const size_t degree )
     {
+        return bsplineExtractionData( kv, degree ).local;
+    }
+
+    BSplineExtractionData bsplineExtractionData( const KnotVector& kv, const size_t degree )
+    {
         using SparseMatrixXd = Eigen::SparseMatrix<double>;
 
-        const SparseMatrixXd C = globalExtractionOp( kv, degree );
+        BSplineExtractionData data;
+        data.global = globalExtractionOp( kv, degree );
+        const SparseMatrixXd& C = data.global;
         const std::vector<size_t> column_offsets = elementBezierColumnOffsets( kv, degree );
-        std::vector<LocalExtraction> out;
+        std::vector<LocalExtraction>& out = data.local;
         out.reserve( numElements( kv ) );
 
         for( size_t elem_ii = 0, n_elems = numElements( kv ); elem_ii < n_elems; elem_ii++ )
@@ -71,7 +78,7 @@ namespace basis
             out.push_back( local );
         }
 
-        return out;
+        return data;
     }
 
     std::vector<size_t> elementBezierColumnOffsets( const KnotVector& kv, const size_t degree )

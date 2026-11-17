@@ -13,6 +13,17 @@ namespace basis
         Eigen::MatrixXd extraction;
     };
 
+    /// @brief One global extraction operator and the element-local data derived from it.
+    struct BSplineExtractionData
+    {
+        Eigen::SparseMatrix<double> global;
+        std::vector<LocalExtraction> local;
+    };
+
+    /// @brief Compute global extraction once for consumers needing both global and local data.
+    /// Local operators and connectivity have the same ordering as localExtractions.
+    BSplineExtractionData bsplineExtractionData( const KnotVector& kv, const size_t degree );
+
     /// @brief Gives element-local extraction operators for a univariate B-spline space.
     /// @param kv The knot vector defining the space.
     /// @param degree The B-spline degree.

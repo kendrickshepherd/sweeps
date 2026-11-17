@@ -8,8 +8,10 @@
 #include <TPSplineSpace.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <set>
+#include <utility>
 
 using namespace basis;
 using namespace param;
@@ -148,6 +150,96 @@ TEST_CASE( "Element Bezier column offsets follow global extraction layout" )
            std::vector<size_t>{ 0, 3, 6 } );
     CHECK( elementBezierColumnOffsets( KnotVector( { 0, 0, 0, 1, 2, 2, 3, 3, 3, 4, 4, 4 }, ptol ), 2 ) ==
            std::vector<size_t>{ 0, 2, 4, 7 } );
+}
+
+TEST_CASE( "Shared extraction data preserves local and vertex operators exactly", "[extraction_reuse]" )
+{
+    for( size_t degree = 0; degree <= 4; degree++ )
+    {
+        std::vector<std::pair<size_t, size_t>> interior_multiplicities;
+        for( size_t multiplicity = 1; multiplicity <= degree + 1; multiplicity++ )
+            interior_multiplicities.emplace_back( multiplicity, degree + 2 - multiplicity );
+        // The mixed patterns above omit two simple interior knots: add the maximally smooth cubic case.
+        if( degree == 3 ) interior_multiplicities.emplace_back( 1, 1 );
+        for( const auto& [first_multiplicity, second_multiplicity] : interior_multiplicities )
+        {
+            CAPTURE( degree, first_multiplicity, second_multiplicity );
+            const std::vector<double> breaks{ -2.0, -1.75, 0.5, 3.0 };
+            std::vector<double> knots( degree + 1, breaks.front() );
+            knots.insert( knots.end(), first_multiplicity, breaks.at( 1 ) );
+            knots.insert( knots.end(), second_multiplicity, breaks.at( 2 ) );
+            knots.insert( knots.end(), degree + 1, breaks.back() );
+            const KnotVector kv( knots, 1e-12 );
+            const Eigen::SparseMatrix<double> reference = globalExtractionOp( kv, degree );
+            const BSplineExtractionData data = bsplineExtractionData( kv, degree );
+            const std::vector<LocalExtraction> legacy = localExtractions( kv, degree );
+            REQUIRE( data.global.rows() == reference.rows() );
+            REQUIRE( data.global.cols() == reference.cols() );
+            REQUIRE( data.global.nonZeros() == reference.nonZeros() );
+            REQUIRE( data.global.isCompressed() );
+            CHECK( std::equal( reference.outerIndexPtr(), reference.outerIndexPtr() + reference.outerSize() + 1,
+                               data.global.outerIndexPtr() ) );
+            CHECK( std::equal( reference.innerIndexPtr(), reference.innerIndexPtr() + reference.nonZeros(),
+                               data.global.innerIndexPtr() ) );
+            CHECK( std::memcmp( reference.valuePtr(), data.global.valuePtr(),
+                                reference.nonZeros() * sizeof( double ) ) == 0 );
+            REQUIRE( data.local.size() == breaks.size() - 1 );
+            REQUIRE( legacy.size() == data.local.size() );
+
+            const auto cmap = std::make_shared<const CombinatorialMap1d>( breaks.size() - 1 );
+            const auto atlas = std::make_shared<const ParametricAtlas1d>( cmap, parametricLengths( kv ) );
+            const auto bc = std::make_shared<const BasisComplex1d>( atlas, degree );
+            const BSplineSpace1d ss( bc, kv );
+            size_t offset = 0;
+            for( size_t elem = 0; elem < data.local.size(); elem++ )
+            {
+                const auto& local = data.local.at( elem );
+                const double midpoint = 0.5 * ( breaks.at( elem ) + breaks.at( elem + 1 ) );
+                std::vector<FunctionId> expected;
+                for( size_t fid = 0; fid < knots.size() - degree - 1; fid++ )
+                    if( knots.at( fid ) < midpoint and midpoint < knots.at( fid + degree + 1 ) )
+                        expected.emplace_back( fid );
+                CHECK( local.connectivity == expected );
+                REQUIRE( local.extraction.rows() == static_cast<Eigen::Index>( expected.size() ) );
+                REQUIRE( local.extraction.cols() == static_cast<Eigen::Index>( degree + 1 ) );
+                for( size_t row = 0; row < expected.size(); row++ )
+                    for( size_t col = 0; col <= degree; col++ )
+                        CHECK( local.extraction( row, col ) ==
+                               reference.coeff( expected.at( row ).id(), offset + col ) );
+                CHECK( legacy.at( elem ).connectivity == local.connectivity );
+                REQUIRE( legacy.at( elem ).extraction.rows() == local.extraction.rows() );
+                REQUIRE( legacy.at( elem ).extraction.cols() == local.extraction.cols() );
+                CHECK( std::memcmp( legacy.at( elem ).extraction.data(), local.extraction.data(),
+                                    local.extraction.size() * sizeof( double ) ) == 0 );
+                const Cell cell( Dart( elem ), 1 );
+                CHECK( ss.connectivity( cell ) == local.connectivity );
+                const Eigen::MatrixXd op = ss.extractionOperator( cell );
+                REQUIRE( op.rows() == local.extraction.rows() );
+                REQUIRE( op.cols() == local.extraction.cols() );
+                CHECK( std::memcmp( op.data(), local.extraction.data(), op.size() * sizeof( double ) ) == 0 );
+                if( elem == 0 ) offset += std::max( first_multiplicity, degree );
+                else if( elem == 1 ) offset += std::max( second_multiplicity, degree );
+            }
+
+            // Preserve the existing vertex convention, including broken-space behavior; fixing that is not B2.
+            for( size_t vertex = 0; vertex <= breaks.size() - 1; vertex++ )
+            {
+                CAPTURE( vertex );
+                const size_t column = vertex * degree;
+                std::vector<FunctionId> expected;
+                for( Eigen::SparseMatrix<double>::InnerIterator it( reference, column ); it; ++it )
+                    expected.emplace_back( it.row() );
+                const bool end = vertex == breaks.size() - 1;
+                const Cell cell( Dart( vertex ), 0 );
+                CHECK( ( end ? ss.endVertexConnectivity() : ss.connectivity( cell ) ) == expected );
+                const Eigen::MatrixXd op = end ? ss.endVertexExtractionOperator() : ss.extractionOperator( cell );
+                REQUIRE( op.rows() == static_cast<Eigen::Index>( expected.size() ) );
+                REQUIRE( op.cols() == 1 );
+                for( size_t row = 0; row < expected.size(); row++ )
+                    CHECK( op( row, 0 ) == reference.coeff( expected.at( row ).id(), column ) );
+            }
+        }
+    }
 }
 
 TEST_CASE( "Local extractions respect smooth, C0, and broken 1D continuity" )

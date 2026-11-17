@@ -34,6 +34,8 @@ namespace basis
         private:
         const std::shared_ptr<const BasisComplex1d> mBasisComplex;
         const KnotVector mKnotVector;
+        // The owned knot vector and degree are immutable; connectivity reads this count frequently.
+        const size_t mNumFunctions;
         std::map<size_t, Eigen::MatrixXd> mExtractionOps;
         std::map<size_t, Eigen::MatrixXd> mVertExtractionOps;
         std::map<size_t, std::vector<FunctionId>> mConnectivity;

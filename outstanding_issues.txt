@@ -2778,8 +2778,8 @@ MEDIUM PRIORITY — Architectural / Correctness
              level construction and the validator on a deep single-patch
              hierarchy (StokesFlow allows level 7) and a multipatch one;
              decide whether any needs work before the loop relies on it.
-             [FIRST HALF DONE 2026-11-17, measurement only, awaiting
-             review: STEP 10.7 below.]
+             [FIRST HALF DONE 2026-11-17, measurement only.  B1 and B2
+             reviewed, awaiting commit; C not started.  STEP 10.7 below.]
        10.8  StokesFlow-side integration test, in that repository and
              committed there: estimate, mark, grade, close, construct in
              Sweeps, validate P_n, every cycle.  Single patch first;
@@ -4035,6 +4035,128 @@ MEDIUM PRIORITY — Architectural / Correctness
        are output-identical, with strong oracles.  Record D as a new item,
        not done before 10.8.  A is defensible: nothing measured blocks
        10.8.
+
+     STEP 10.7, B1 AND B2 (2026-11-17).  Reviewed, awaiting commit.
+       User requested two output-preserving optimizations, measured
+       separately: B1 caches BSplineSpace1d's function count; B2 reuses
+       one global extraction operator for element and vertex data.
+       C (leaf-local activity), B3 (connectivity allocations) and D
+       (restricted extraction storage) are not part of this change.
+       No git staging or commit.
+     Code.
+       B1: BSplineSpace1d owns a const mNumFunctions, initialized from
+         the original knot-count-minus-degree-minus-one formula.
+         numFunctions returns it.  The owned knot vector and parent
+         basis are immutable, so no invalidation machinery is needed.
+         KnotVector::size and its mutable operations are unchanged.
+         The class layout changes; native clients must be rebuilt.
+       B2: BSplineExtractionData contains one global extraction operator
+         and the local operators/connectivity derived from it.
+         bsplineExtractionData computes globalExtractionOp once.
+         localExtractions delegates and moves out the local data,
+         preserving that API.  BSplineSpace1d uses the bundle for its
+         element and vertex paths, rather than computing global
+         extraction again for vertices.  No arithmetic, numbering,
+         ordering, continuity rule or vertex convention is changed.
+     Tests.
+       SplineSpace1d_test: degrees 0-4, nonuniform spans and interior
+         multiplicities from 1 through degree+1, mixed across the two
+         interior knots.  Counts and exact ordered connectivity come
+         from the raw knots; their union covers all function ids.
+         Mutating the caller's knot vector leaves the owned knots and
+         cached count unchanged; copied spaces retain the count.
+         Focused suite: 200 assertions in 3 cases, exit 0.
+       BezierTransfer_test initially used the same 15 degree/multiplicity
+         fixtures; the closeout below adds an all-simple cubic fixture.
+         Bundle global sparse indices and value bits equal a direct
+         globalExtractionOp call.  Local connectivity comes from support
+         intervals in the raw knots; coefficients equal the applicable
+         global columns.  Compatibility-API and space element matrices
+         agree byte-for-byte with the bundle.  All vertices, including
+         the end vertex, retain the existing global-column convention.
+         Initial focused suite: 1775 assertions in 6 cases, exit 0.
+       Separate pre-/post-B2 snapshot: 272 text records containing exact
+         function ids and the bit patterns of every extraction value.
+         All 1D element/vertex data for the original 15 fixtures, plus every
+         cell dimension of mixed-continuity 2D and 3D tensor products.
+         cmp reports byte-identical output, exit 0.  This snapshot was
+         captured before changing the B2 implementation, not regenerated
+         from its result.  Existing evaluation tests remain independent
+         checks on the extraction mathematics.
+     Measurement, MEASURED, Release, three separate processes per entry.
+       The first-half scratch harness, rebuilt against the changed
+       class layout after B1.  All runs serial; no concurrent agent build
+       or test run.  Medians of constructor seconds at level 7:
+                       before         B1          B1+B2
+         F1             7.9615       6.7150        6.0742
+         F1n            5.8434       4.9412        4.4455
+         F1w            8.6738       7.3877        6.7470
+         F2            21.1777      16.1458       14.6085
+       These are fixture measurements, not timing gates or guarantees.
+       Policy verdicts, leaves, H1/H(div)/L2 function counts and level
+       extraction nonzero counts are unchanged in all 36 runs.
+       No material peak-memory saving is observed.  Full-level extraction
+       storage and full-domain activity traversal remain; these changes
+       do not address their asymptotic scaling.  C still needs design
+       and implementation.  B3 remains deferred pending a new profile.
+       The first-half harness remains in its original scratch directory;
+       27987ce committed its timing record, not a benchmark target.
+       New logs and the snapshot harness are in
+         /private/tmp/sweeps-b1-b2.e4bbvr.
+     Bypass probes, MEASURED.  The affected paths and expected failing
+       checks were predicted before executing any probe.  The failure
+       counts and exit codes below were measured, not predicted.
+       Each changes one production path, rebuilds basis and runs the named
+       regression.  Sources are restored through apply_patch; both source
+       hashes equal the pre-probe SHA-256 values after each restoration.
+       The extraction probes used the original 15-fixture test, before
+       the closeout added the all-simple cubic fixture.
+         P1  numFunctions returns cached count + 1.  Count regression:
+             45 failures, direct Catch2 exit 45, all count comparisons.
+         P2  Vertex path reads twice the bundle global operator.  Reuse
+             regression: 77 failures, direct Catch2 exit 77, all vertex
+             coefficient comparisons; element checks still pass.  This
+             is a failing native test, not a skipped Python smoke test.
+         P3  localExtractions wrapper discards its local data.  Reuse
+             regression: size REQUIRE fails, direct Catch2 exit 1.  The
+             constructor path alone would not catch this wrapper defect.
+     Verification before closeout, MEASURED, restored sources.
+       Full build: exit 0, zero error or warning lines.  Every library,
+       binding and test target rebuilt as needed after the class-layout
+       change.  Full ctest, one run, -j 8 under caffeinate -i: 282/282
+       pass, zero failures, exit 0, 96.53 s.  All five Python import/smoke
+       tests pass, none skipped.  Macaroni vertex tracing passes in
+       95.24 s.  SplineSpace1d_test and BezierTransfer_test have 3 and 6
+       cases, respectively (one new case each; prior suite 280 tests).
+       Final source hashes equal the pre-probe hashes.  The extraction
+       snapshot is still byte-identical after the full rebuild (cmp,
+       exit 0).  git diff --check is clean; added ledger lines are at
+       most 80 columns and added test lines at most 120.
+     REVIEW CLOSEOUT (2026-11-17).
+       B1/B2 are named directly above, without a reference to an external
+       numbered sequence; the status says reviewed and awaiting commit.
+       Probe predictions concern the affected paths and failing checks,
+       not the measured numerical failure counts.  The caller-knot
+       mutation check is a compatibility regression, not new behavior.
+       The exact extraction test now adds a maximally smooth cubic on
+       the same nonuniform breaks, with both interior multiplicities 1.
+       It runs the existing global, local, compatibility-API, element and
+       vertex comparisons unchanged, for 16 fixtures in total.
+       Production source hashes still equal the pre-probe reference.
+       No new profiling or fault injections are needed for this added
+       test fixture.  C and its independent reference tests are not
+       started; they belong after the B1/B2 commit boundary.
+       Final closeout results, MEASURED: full build exit 0, zero errors
+       and warnings.  SplineSpace1d_test: 200 assertions in 3 cases;
+       BezierTransfer_test: 1885 assertions in 6 cases; both exit 0.
+       Full ctest, one run, -j 8 under caffeinate -i: 282/282 pass, zero
+       failures, exit 0, 135.05 s.  All five Python import/smoke tests
+       pass, none skipped.  Macaroni vertex tracing passes in 133.96 s.
+       git diff --check is clean; added ledger lines are at most 80
+       columns and added test lines at most 120.  No production changes
+       were made for the closeout, and nothing is staged or committed.
+       Closeout build and test logs:
+         /private/tmp/sweeps-b1-b2-closeout.ODZNyx.
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces

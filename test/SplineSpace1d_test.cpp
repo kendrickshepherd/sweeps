@@ -9,6 +9,7 @@
 #include <CommonUtils.hpp>
 #include <TPSplineSpace.hpp>
 #include <Eigen/Dense>
+#include <set>
 
 using namespace basis;
 using namespace param;
@@ -35,6 +36,55 @@ TEST_CASE( "Extraction of cubic spline with various knot multiplicities" )
         CHECK( lu.rank() == op.rows() );
         return true;
     } );
+}
+
+TEST_CASE( "Spline function counts and numbering survive caching", "[spline_count]" )
+{
+    for( size_t degree = 0; degree <= 4; degree++ )
+    {
+        for( size_t multiplicity = 1; multiplicity <= degree + 1; multiplicity++ )
+        {
+            CAPTURE( degree, multiplicity );
+            // Nonuniform spans, including smooth, C0, broken and mixed multiplicities.
+            const std::vector<double> breaks{ -2.0, -1.75, 0.5, 3.0 };
+            std::vector<double> knots( degree + 1, breaks.front() );
+            knots.insert( knots.end(), multiplicity, breaks.at( 1 ) );
+            knots.insert( knots.end(), degree + 2 - multiplicity, breaks.at( 2 ) );
+            knots.insert( knots.end(), degree + 1, breaks.back() );
+            KnotVector kv( knots, 1e-12 );
+            const auto cmap = std::make_shared<const CombinatorialMap1d>( breaks.size() - 1 );
+            const auto atlas = std::make_shared<const ParametricAtlas1d>( cmap, parametricLengths( kv ) );
+            const auto bc = std::make_shared<const BasisComplex1d>( atlas, degree );
+            const BSplineSpace1d ss( bc, kv );
+            const size_t expected_count = knots.size() - degree - 1;
+            CHECK( ss.numFunctions() == expected_count );
+
+            std::set<size_t> seen;
+            iterateCellsWhile( *cmap, 1, [&]( const Cell& cell ) {
+                const size_t elem = cell.dart().id();
+                const double midpoint = 0.5 * ( breaks.at( elem ) + breaks.at( elem + 1 ) );
+                std::vector<FunctionId> expected;
+                for( size_t fid = 0; fid < expected_count; fid++ )
+                    if( knots.at( fid ) < midpoint and midpoint < knots.at( fid + degree + 1 ) )
+                        expected.emplace_back( fid );
+                CHECK( ss.connectivity( cell ) == expected );
+                for( const FunctionId& fid : ss.connectivity( cell ) ) seen.insert( fid.id() );
+                return true;
+            } );
+            CHECK( seen.size() == expected_count );
+            CHECK( *seen.begin() == 0 );
+            CHECK( *seen.rbegin() == expected_count - 1 );
+
+            // A spline owns its knot vector; later caller mutations must not alter its cached count.
+            kv.duplicate( 0 );
+            kv.insert( -1.0, 1e-12 );
+            CHECK( kv.size() == knots.size() + 2 );
+            CHECK( ss.knotVector().size() == knots.size() );
+            CHECK( ss.numFunctions() == expected_count );
+            const BSplineSpace1d copied( ss );
+            CHECK( copied.numFunctions() == expected_count );
+        }
+    }
 }
 
 TEST_CASE( "TP Spline space" )

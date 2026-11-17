@@ -9,7 +9,8 @@
 namespace basis
 {
     BSplineSpace1d::BSplineSpace1d( const std::shared_ptr<const BasisComplex1d>& bc, const KnotVector& kv )
-        : mBasisComplex( bc ), mKnotVector( kv )
+        : mBasisComplex( bc ), mKnotVector( kv ),
+          mNumFunctions( kv.size() - bc->defaultParentBasis().mBasisGroups.at( 0 ).degrees.at( 0 ) - 1 )
     {
         const size_t degree = bc->defaultParentBasis().mBasisGroups.at( 0 ).degrees.at( 0 );
         if( kv.uniqueKnotMultiplicities().at( 0 ).second != degree + 1 or kv.uniqueKnotMultiplicities().back().second != degree + 1 )
@@ -18,7 +19,8 @@ namespace basis
         using SparseMatrixXd = Eigen::SparseMatrix<double>;
 
         const topology::CombinatorialMap1d& cmap = bc->parametricAtlas().cmap();
-        const std::vector<LocalExtraction> local_extractions = localExtractions( kv, degree );
+        const BSplineExtractionData extraction_data = bsplineExtractionData( kv, degree );
+        const std::vector<LocalExtraction>& local_extractions = extraction_data.local;
 
         iterateCellsWhile( cmap, 1, [&]( const topology::Edge& e ) {
             const size_t elem_ii = e.dart().id();
@@ -29,7 +31,7 @@ namespace basis
         } );
 
         /// Add vertex connectivity and operators
-        const SparseMatrixXd C = globalExtractionOp( kv, degree );
+        const SparseMatrixXd& C = extraction_data.global;
         // Vertex extraction represents a single shared vertex value and is valid for C >= 0 continuity.
         // For C^{-1} spaces, interior vertices have two one-sided traces that should be handled by the
         // side-aware trace layer rather than this vertex extraction path.
@@ -105,6 +107,6 @@ namespace basis
 
     size_t BSplineSpace1d::numFunctions() const
     {
-        return mKnotVector.size() - mBasisComplex->defaultParentBasis().mBasisGroups.at( 0 ).degrees.at( 0 ) - 1;
+        return mNumFunctions;
     }
 }
