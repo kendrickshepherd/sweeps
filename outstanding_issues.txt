@@ -2772,12 +2772,14 @@ MEDIUM PRIORITY — Architectural / Correctness
              check replaced by IDENTITY's (accept all) must fail a named
              failing fixture; restored byte-identical.
              [FIRST HALF DONE 2026-11-16, committed 81d4e64; SECOND
-             HALF DONE 2026-11-17, awaiting review: STEP 10.6 below.  The
-             step 9 gate is asserted, not measurement only (R5).]
+             HALF DONE 2026-11-17, committed 755981d: STEP 10.6 below.
+             The step 9 gate is asserted, not measurement only (R5).]
        10.7  Profiling at depth: levelActiveFunctions (COST, STEP 5 FIX),
              level construction and the validator on a deep single-patch
              hierarchy (StokesFlow allows level 7) and a multipatch one;
              decide whether any needs work before the loop relies on it.
+             [FIRST HALF DONE 2026-11-17, measurement only, awaiting
+             review: STEP 10.7 below.]
        10.8  StokesFlow-side integration test, in that repository and
              committed there: estimate, mark, grade, close, construct in
              Sweeps, validate P_n, every cycle.  Single patch first;
@@ -3780,6 +3782,259 @@ MEDIUM PRIORITY — Architectural / Correctness
          build's flags.make files); no Catch2 executable is.  Only the
          registered smoke test runs a catch inside the hidden-visibility
          module.
+     [COMMITTED 755981d]
+
+     STEP 10.7, FIRST HALF (2026-11-17): measurement only.  No production
+       code changed.  HEAD 755981d, Release (-O3 -DNDEBUG), x86_64.
+       Predictions written before any measurement (step10_7/predictions.txt
+       in the session scratchpad, with the harness and the logs; not
+       committed).  Verdicts below.
+     Fixtures.  Degree 3; control points at the Greville points (affine).
+       Level l < L marks the level-l cells named.
+         F1(L)   One patch, 7 x 7 unit cells.  Every level l < L marks the
+                 level-l block [0,4)^2.  Leaves 49 + 48 L (L >= 1).
+         F1w(L)  F1 with wider marks: level 0 [0,6)^2, level 1 [0,10)^2,
+                 levels >= 2 [0,16)^2.  11.2x F1's leaves at L = 7.
+         F1n(7)  StokesFlow's default shape: the NURBS constructor
+                 (weights 1), 6 x 6 cells, F1's marks.
+         F2(L)   Two 7 x 7 patches, patch 0 side 1 glued to patch 1 side 0.
+                 At level l, patch 0 marks [n_l - 4, n_l) x [0,4) and patch
+                 1 marks [0,4)^2 (n_l = 7 * 2^l): both sides of the
+                 interface corner refine.  Leaves 98 + 96 L.
+     Method.  A scratch C++ harness, compiled with the build's flags and
+       linked to the build's libraries.  One process per (fixture, L),
+       three processes each.
+         ctor: steady_clock around the public constructor.
+         check: checkRefinementPolicy(NFormSupport).
+         Max RSS (ru_maxrss) and resident size right after the constructor.
+         Sub-phases, re-executed afterwards in the first process (warm) by
+           the calls the constructor makes: levelActiveFunctions per level
+           (its union checked equal to activeFunctions() on every run), the
+           HierarchicalTPSplineSpace constructor, refinementOp per level,
+           prolongationOperator, CombinatorialMapBoundary, buildBSpline per
+           H1 level.
+         Attribution: macOS sample (1 ms) over one constructor-only run of
+           F1(7) and of F2(7), collapsed by function name.  Shares are of
+           the constructor's samples, not times; the sampled constructors
+           took 9.43 s and 25.86 s.
+         Memory: malloc_zone_statistics size_in_use around the constructor
+           and after destruction, two processes per L.
+         Python: the splines module (python 3.8) on F1, one process per L.
+
+     Result, MEASURED (ranges over three processes).
+       F1   ctor s          check s         max RSS MB      E nonzeros
+       L0   0.0008          0.0000             3.2                 361
+       L1   0.0040-0.0052   0.0002             3.4-3.8           4,088
+       L2   0.0112-0.0165   0.0006-0.0008      4.3-5.1          28,787
+       L3   0.0368-0.0379   0.0021-0.0024      9.1-10.2        154,398
+       L4   0.1325-0.1556   0.0084-0.0092     34.7-38.1        720,225
+       L5   0.5416-0.5718   0.0367-0.0467    141.7-165.5     3,122,572
+       L6   1.9695-2.0429   0.1576-0.1605    420.2-445.8    13,024,831
+       L7   8.4787-8.7183   0.6741-0.6848   1484.4-1523.7   53,236,922
+       E nonzeros: the level extraction operators of H1, both H(div)
+       components and L2, summed.  Resident size equals max RSS after the
+       constructor on every run.  F1(7): 385 leaves; 436 H1, 852 H(div)
+       and 417 L2 functions.
+
+       F2   ctor s            check s         max RSS MB      E nonzeros
+       L0    0.0026-0.0027    0.0000             3.4                 722
+       L1    0.0094-0.0100    0.0003             3.8               8,176
+       L2    0.0277-0.0281    0.0011-0.0012      5.7-6.0          57,574
+       L3    0.0864-0.0867    0.0039-0.0042     12.6-13.3        308,796
+       L4    0.3158-0.3175    0.0160-0.0170     53.0-59.7      1,440,450
+       L5    1.2544-1.2769    0.0697-0.0732    225.2-260.9     6,245,144
+       L6    5.1436-5.2060    0.3097-0.3198    679.2-690.1    26,049,662
+       L7   23.5491-23.6910   1.3620-1.3815   2389.8-2411.1  106,473,844
+       E nonzeros summed over the patch constituents.  F2(7): 770 leaves,
+       834 H1 functions.
+
+       Variants at L = 7:
+         F1w(7)  ctor 9.44-9.66 s, check 0.69-0.70 s, max RSS 1453-1461 MB,
+                 52,658,876 nonzeros, 4297 leaves.
+         F1n(7)  ctor 6.23-6.27 s, check 0.50 s, max RSS 1111-1131 MB,
+                 39,533,657 nonzeros, 372 leaves.
+         F1w(5)  ctor 0.56 s (one process), 2761 leaves; F1(5) 0.54-0.57 s
+                 with 289.
+
+       Sub-phases at F1(7), first process, seconds:
+                  levelActiveFunctions   HierarchicalTPSplineSpace   refinementOp
+         H1              1.073                  1.637                   0.122
+         HDIV0           1.022                  1.421                   0.111
+         HDIV1           1.005                  1.392                   0.110
+         L2              0.977                  1.263                   0.098
+         total           4.077                  5.713                   0.441
+         prolongationOperator 0.916; buildBSpline over the 8 H1 levels
+         1.146; boundary 0.005; leafElements <= 0.004 per space.
+         The HierarchicalTPSplineSpace re-run includes levelActiveFunctions,
+         so the extraction loop is 1.636 s.  The parts sum to 7.78 s of that
+         process's 8.48 s constructor; the rest includes the H(div) level
+         spaces (318 samples below).
+         Growth per depth, L5 -> L6 -> L7: levelActiveFunctions (four
+         spaces) 0.197, 0.851, 4.077 s (4.3x, 4.8x); buildBSpline levels
+         0.091, 0.294, 1.146 s (3.2x, 3.9x).
+
+     Attribution, MEASURED (sample counts).
+       F1(7), constructor 7270 samples:
+         levelActiveFunctions, four spaces              3500   48%
+           TPSplineSpace::connectivity                  2404   (69% of it)
+             KnotVector::size, via numFunctions         1019   (29%)
+             BSplineSpace1d::connectivity, mostly
+               operator new and free                     700   (20%)
+           iterateChildren                               338   (10%)
+         extraction loop, rest of the four
+           HierarchicalTPSplineSpace constructors       1558   21%
+         BSplineSpace1d constructors                    1311   18%
+           globalExtractionOp, direct                    673
+           globalExtractionOp, via localExtractions      625
+           (buildBSpline 993; H(div) reduced-degree
+            1D bases 318)
+         prolongationOperator                            883   12%
+         Under the whole constructor: KnotVector::size 1019 (14%),
+         globalExtractionOp 1298 (18%), BSplineSpace1d::connectivity 741
+         (10%).
+       F2(7), constructor 20081 samples:
+         levelActiveFunctions                          12025   60%
+           VectorConformingMultiPatchSplineSpace        7553;
+             numFunctions 3493 of them (46%)
+           MultiPatchSplineSpace (H1 and L2)            4472;
+             numFunctions 1042 of them (23%)
+         buildBSpline                                    1979   10%
+         prolongationOperator                            1628    8%
+         Under the whole constructor: KnotVector::size 4273 (21%),
+         globalExtractionOp 2590 (13%), BSplineSpace1d::connectivity 1700
+         (8%).
+
+     Memory, MEASURED (F1, two processes per L).
+            in use after   extraction ops   resident after   in use after
+            constructor    allocated        constructor      destruction
+       L6   168-174 MB     153 MB           440-451 MB         6-12 MB
+       L7   701-704 MB     626 MB           1498-1524 MB      18-21 MB
+       The discretization keeps about 0.70 GB at F1(7), 89% of it in level
+       extraction operators.  The other ~0.8 GB of the peak is construction
+       temporaries, freed but kept resident by the allocator: resident size
+       after destruction stays at 1504-1531 MB.
+
+     Queries, MEASURED (Python, F1, seconds).
+                                           L5       L6       L7
+       constructor                       0.515    2.058    8.545
+       checkRefinementPolicy             0.036    0.159    0.677
+       activeLeafElementInfo             0.0005   0.0011   0.0033
+       hierarchicalRefinementDiagnostics 0.009    0.027    0.144
+       l2LevelSupports(L - 1)            0.064    0.287    1.776
+       l2LevelSupports(L)                0.296    1.425    6.384
+       l2LevelSupports(L - 1) and (L) return 12,996 and 51,076 entries at
+       L5, 51,076 and 202,500 at L6, and 202,500 and 806,404 at L7.  At
+       L7, max RSS goes from 1697 MB to 1935 MB over l2LevelSupports(6),
+       then to 3062 MB over l2LevelSupports(7).
+       StokesFlow's closure calls l2LevelSupports(level) lazily, once per
+       closed level per cycle.  Its marker skips marks at level >=
+       max_level (RefinementUtilities.py:295, :550-563; ARGUED from code,
+       not run).  So with max_level 7, the level-7 call is not on that
+       path.
+
+     Prediction verdicts.
+       1. F1 constructor ratio per depth, L >= 4, in [3.3, 4.5]: CONFIRMED
+          (3.5, 4.2, 3.6, 4.2 on medians).  Max RSS in the same band:
+          REFUTED at L5 -> L6 (3.7, 4.1, 2.9, 3.5).  Not predicted: F2's
+          L7/L6 constructor ratio is 4.5.
+       2. F1w(7) within +-25% of F1(7): CONFIRMED.  1.11x the constructor
+          time and 0.96x the max RSS, with 11.2x the leaves.
+       3. Magnitude in [2, 20] s: CONFIRMED (8.5-8.7 s); the point estimate
+          (6 s) was low.  The split: levelActiveFunctions 48% (predicted
+          45%), the extraction loop 21% (30%), prolongation 12% (10%), the
+          rest 18% (15%).  P4 ("level spaces small", LOW CONFIDENCE):
+          REFUTED.  The 1D B-spline constructors alone are 18%.
+       4. ~53M nonzeros: CONFIRMED (53,236,922; 626 MB allocated, predicted
+          0.64 GB).  Max RSS in [0.7, 1.6] GB: CONFIRMED (1.48-1.52 GB).
+       5. Validator in [0.05, 0.5] s: REFUTED (0.67-0.68 s).  Under 10% of
+          the constructor: CONFIRMED (7.9%).  ~4x per depth: CONFIRMED (4.3
+          at L6 -> L7).
+       6. F1n(7) ~0.73x F1(7): CONFIRMED (0.73 on medians).
+       7. F2(7) over F1(7): constructor in [1.5, 3.5]x CONFIRMED (2.75);
+          max RSS in [1.5, 3]x CONFIRMED (1.58); validator ~2x CONFIRMED
+          (2.02).
+       8. l2LevelSupports(6) in [0.5, 5] s: CONFIRMED (1.43 s at L6, 1.78 s
+          at L7).  activeLeafElementInfo under 50 ms: CONFIRMED (3.3 ms).
+          Not predicted: l2LevelSupports(7) at L7 takes 6.4 s and adds
+          1.1 GB to max RSS.
+       9. Every fixture satisfies NFormSupport: CONFIRMED, every run.
+
+     Findings, ARGUED from code; the shares are the samples above.
+       (i)   KnotVector::size (src/basis/KnotVector.cpp:32) sums over the
+             unique knots: O(cells per direction).
+             BSplineSpace1d::numFunctions (src/basis/BSplineSpace1d.cpp:106)
+             calls it.  TPSplineSpace::connectivity
+             (src/basis/TPSplineSpace.cpp:83) calls mSource->numFunctions()
+             on every call, and VectorConformingTPSplineSpace::connectivity
+             calls TPSplineSpace::numFunctions.  14% of the F1(7)
+             constructor, 21% of F2(7)'s.
+       (ii)  The BSplineSpace1d constructor computes globalExtractionOp
+             twice: once inside localExtractions
+             (src/basis/BezierTransfer.cpp:34), and again at
+             src/basis/BSplineSpace1d.cpp:32.  Its cost grows about 4x per
+             depth (buildBSpline over the levels, above), consistent with
+             O(n^2) in the 1D function count.  The second call is 9% of
+             F1(7) and 7% of F2(7).
+       (iii) TPSplineSpace::connectivity returns by value and builds three
+             vectors per call: two copies of 1D connectivity from their
+             maps, and the output.  BSplineSpace1d::connectivity, mostly
+             allocation, is 10% of F1(7) and 8% of F2(7).
+       (iv)  levelActiveFunctions (src/basis/ThbActiveFunctions.hpp:17)
+             erases the functions of every level-l cell under a coarser
+             leaf.  That set is the complement of Omega^l, nearly the whole
+             level-l domain, and its descent restarts from level 0 for each
+             level.  This is why the phase scales as 4^L and not with the
+             leaves (F1w: 11.2x the leaves, 1.1x the time).  48% of F1(7),
+             60% of F2(7).
+       (v)   The level extraction operators, refinementOps and the
+             prolongation span the whole level-l domain: every coarse row
+             is expanded over all of it (the HierarchicalTPSplineSpace
+             constructor; prolongationOperator).  The extraction loop is
+             21% and prolongation 12% of F1(7); the operators are 89% of the
+             retained memory.
+       (vi)  The validator (src/basis/NFormSupportPolicy.cpp:65) computes
+             tensorCellSupports for every level-l L2 function, at each
+             level: 7-8% of the constructor at L5-L7.  The l2LevelSupports
+             binding (src/api/SplinesAPI.cpp:603) returns every level-l L2
+             function's support.
+
+     Options (the choice is the user's).  Savings are projected from the
+       sample shares, assuming the removed work drops to ~0.  They are
+       ARGUED, not measured.
+       A  No change before 10.8.  Level 7 is feasible: per rebuild, 6.2 s
+          on StokesFlow's default shape, 8.5 s on F1 and 23.6 s on F2, with
+          peak resident 1.1-2.4 GB.  StokesFlow's own per-cycle costs at
+          depth are unmeasured; 10.8 would measure them.
+       B  Small, output-identical changes to validated code:
+            B1  O(1) numFunctions: store the count in BSplineSpace1d, or
+                the size in KnotVector.  -14% F1(7), -21% F2(7).
+            B2  One globalExtractionOp per BSplineSpace1d constructor:
+                -9%, -7%.  Bit-identical by construction, since the same
+                result is reused.
+            B3  Fewer allocations in TPSplineSpace::connectivity: up to
+                -10%.  LOW CONFIDENCE.
+          Scaling stays 4^L.
+       C  levelActiveFunctions made leaf-local, output-identical.  For each
+          candidate (a function of a level-l leaf), test whether its support
+          lies in Omega^l, instead of erasing the complement's functions.
+          This removes most of the 48% (F1) and 60% (F2), and most of B1's
+          saving with it: 1019 of F1's 1050 KnotVector::size samples are
+          under this phase.  The oracle is the current implementation,
+          which the harness already compares against activeFunctions().  It
+          needs a cell-in-Omega^l query on the hierarchical cmap, not yet
+          designed.
+       D  Structural, a contract change: restrict the level extraction
+          operators, refinementOps and the prolongation to Omega^l, and
+          restrict l2LevelSupports (a StokesFlow-facing binding).  It
+          changes what levelExtractionOperators() returns, and its
+          consumers.  It needs its own item, with design and tests.  This is
+          what makes the remaining ~half of the time, and the memory, scale
+          with the leaves.
+       Recommendation: C plus B2 as the second half of 10.7, projected to
+       take F1(7) from ~8.5 s to ~4 s and F2(7) from ~23.6 s to ~8 s.  Both
+       are output-identical, with strong oracles.  Record D as a new item,
+       not done before 10.8.  A is defensible: nothing measured blocks
+       10.8.
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces
