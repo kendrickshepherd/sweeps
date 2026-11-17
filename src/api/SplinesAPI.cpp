@@ -5,6 +5,7 @@
 #include <pybind11/operators.h>
 #include <KnotVector.hpp>
 #include <NavierStokesDiscretization.hpp>
+#include <RefinementPolicy.hpp>
 #include <CombinatorialMapMethods.hpp>
 #include <IndexOperations.hpp>
 #include <Eigen/LU>
@@ -48,6 +49,61 @@ PYBIND11_MODULE( splines, m )
         .value( "S1", api::PatchSide::S1 )
         .value( "T0", api::PatchSide::T0 )
         .value( "T1", api::PatchSide::T1 );
+
+    py::enum_<api::RefinementPolicy>( m, "RefinementPolicy" )
+        .value( "NFormSupport", api::RefinementPolicy::NFormSupport )
+        .value( "ZeroFormSupport", api::RefinementPolicy::ZeroFormSupport )
+        .value( "EM", api::RefinementPolicy::EM )
+        .value( "MHD", api::RefinementPolicy::MHD );
+
+    py::class_<api::PolicyFailure>( m, "PolicyFailure" )
+        .def_readonly( "policy", &api::PolicyFailure::policy )
+        .def_readonly( "patch", &api::PolicyFailure::patch )
+        .def_readonly( "level", &api::PolicyFailure::level )
+        .def_property_readonly(
+            "cell",
+            []( const api::PolicyFailure& f ) {
+                py::tuple out( f.cell.size() );
+                for( size_t i = 0; i < f.cell.size(); i++ ) out[i] = f.cell.at( i );
+                return out;
+            },
+            "The first failing cell's level-local, patch-local tensor indices." )
+        .def(
+            "__eq__",
+            []( const api::PolicyFailure& a, const api::PolicyFailure& b ) { return a == b; },
+            py::is_operator() );
+
+    py::class_<api::PolicyCheck>( m, "PolicyCheck" )
+        .def_property_readonly( "satisfied", &api::PolicyCheck::satisfied )
+        .def_property_readonly(
+            "failure",
+            []( const api::PolicyCheck& c ) { return c.failure; },
+            "The first failing cell, ordered by patch, then level, then cell index with the first index fastest; None "
+            "when satisfied." );
+
+    PYBIND11_CONSTINIT static py::gil_safe_call_once_and_store<py::object> policy_violation_storage;
+    policy_violation_storage.call_once_and_store_result( [&]() -> py::object {
+        py::exception<api::PolicyViolation> type( m, "PolicyViolation", PyExc_Exception );
+        type.attr( "__doc__" ) = "Raised by requireRefinementPolicy; failure is checkRefinementPolicy's PolicyFailure.";
+        return type;
+    } );
+    py::register_local_exception_translator( []( std::exception_ptr p ) {
+        try
+        {
+            if( p ) std::rethrow_exception( p );
+        }
+        catch( const api::PolicyViolation& e )
+        {
+            const py::object& type = policy_violation_storage.get_stored();
+            py::object inst = type( e.what() );
+            inst.attr( "failure" ) = py::cast( e.failure(), py::return_value_policy::copy );
+            py::set_error( type, inst );
+        }
+        catch( const api::PolicyNotImplemented& e )
+        {
+            py::set_error( PyExc_NotImplementedError, e.what() );
+        }
+    } );
 
     py::class_<topology::Cell>( m, "Cell" )
         .def_property_readonly(
@@ -751,7 +807,23 @@ PYBIND11_MODULE( splines, m )
             },
             "A list of all HDIV functions which are nonzero on and perpendicular to a given side of the discretization "
             "spline patch",
-            "side"_a );
+            "side"_a )
+        .def(
+            "checkRefinementPolicy",
+            []( const api::NavierStokesHierarchicalDiscretization& nsd, const api::RefinementPolicy policy ) {
+                return api::checkRefinementPolicy( nsd, policy );
+            },
+            "policy"_a,
+            "Check the refinement against a policy and return a PolicyCheck. Raises NotImplementedError for a policy "
+            "that is not implemented (ZeroFormSupport, EM, MHD) and ValueError for an unknown policy." )
+        .def(
+            "requireRefinementPolicy",
+            []( const api::NavierStokesHierarchicalDiscretization& nsd, const api::RefinementPolicy policy ) {
+                api::requireRefinementPolicy( nsd, policy );
+            },
+            "policy"_a,
+            "Raise PolicyViolation, whose failure is checkRefinementPolicy's failure, if the refinement violates the "
+            "policy. Otherwise raises as checkRefinementPolicy." );
 
     py::class_<api::NURBSNavierStokesHierarchicalDiscretization, api::NavierStokesHierarchicalDiscretization>(
         m, "NURBSNavierStokesHierarchicalDiscretization" )
@@ -942,7 +1014,23 @@ PYBIND11_MODULE( splines, m )
             "patch"_a,
             "level"_a,
             "Return tensor-cell supports of all L2 functions of one patch on one refinement level, keyed by the ids of "
-            "that patch's level space; l2PatchLevelActiveIds selects the active ones." );
+            "that patch's level space; l2PatchLevelActiveIds selects the active ones." )
+        .def(
+            "checkRefinementPolicy",
+            []( const api::NavierStokesHierarchicalMultiPatchDiscretization& nsd, const api::RefinementPolicy policy ) {
+                return api::checkRefinementPolicy( nsd, policy );
+            },
+            "policy"_a,
+            "Check the refinement against a policy and return a PolicyCheck. Raises NotImplementedError for a policy "
+            "that is not implemented (ZeroFormSupport, EM, MHD) and ValueError for an unknown policy." )
+        .def(
+            "requireRefinementPolicy",
+            []( const api::NavierStokesHierarchicalMultiPatchDiscretization& nsd, const api::RefinementPolicy policy ) {
+                api::requireRefinementPolicy( nsd, policy );
+            },
+            "policy"_a,
+            "Raise PolicyViolation, whose failure is checkRefinementPolicy's failure, if the refinement violates the "
+            "policy. Otherwise raises as checkRefinementPolicy." );
 
     m.def(
         "grevillePoints",

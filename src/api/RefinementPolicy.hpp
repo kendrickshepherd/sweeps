@@ -35,8 +35,10 @@ namespace api
         bool satisfied() const { return not failure.has_value(); }
     };
 
+    // The exceptions have default visibility so hidden-visibility modules (splines) catch them by type.
+
     /// @brief requireRefinementPolicy's refusal; failure() is the record checkRefinementPolicy returns.
-    class PolicyViolation : public std::runtime_error
+    class __attribute__( ( visibility( "default" ) ) ) PolicyViolation : public std::runtime_error
     {
         public:
         explicit PolicyViolation( const PolicyFailure& failure );
@@ -47,7 +49,7 @@ namespace api
     };
 
     /// @brief A policy, or a valid space for a policy, that the checks do not implement.
-    class PolicyNotImplemented : public std::logic_error
+    class __attribute__( ( visibility( "default" ) ) ) PolicyNotImplemented : public std::logic_error
     {
         public:
         using std::logic_error::logic_error;

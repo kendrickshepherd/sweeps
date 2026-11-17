@@ -115,3 +115,12 @@ add_test(
 set_tests_properties( python_patch_side_bindings_smoke_test PROPERTIES
     ENVIRONMENT PYTHONPATH=${CMAKE_BINARY_DIR}/src/api
     SKIP_RETURN_CODE 77 )
+
+add_test(
+    NAME python_refinement_policy_smoke_test
+    COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/RefinementPolicyBindings_smoke.py
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/src/api
+)
+set_tests_properties( python_refinement_policy_smoke_test PROPERTIES
+    ENVIRONMENT PYTHONPATH=${CMAKE_BINARY_DIR}/src/api
+    SKIP_RETURN_CODE 77 )

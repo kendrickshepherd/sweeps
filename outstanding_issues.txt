@@ -2771,9 +2771,9 @@ MEDIUM PRIORITY — Architectural / Correctness
              gate on the fixtures as measurement only.  Bypass probe: the
              check replaced by IDENTITY's (accept all) must fail a named
              failing fixture; restored byte-identical.
-             [FIRST HALF DONE 2026-11-16, awaiting review: STEP 10.6
-             below.  The step 9 gate is asserted, not measurement only
-             (R5).]
+             [FIRST HALF DONE 2026-11-16, committed 81d4e64; SECOND
+             HALF DONE 2026-11-17, awaiting review: STEP 10.6 below.  The
+             step 9 gate is asserted, not measurement only (R5).]
        10.7  Profiling at depth: levelActiveFunctions (COST, STEP 5 FIX),
              level construction and the validator on a deep single-patch
              hierarchy (StokesFlow allows level 7) and a multipatch one;
@@ -3641,10 +3641,145 @@ MEDIUM PRIORITY — Architectural / Correctness
        the 10.5 layouts.  The step 9 cases cannot detect accept-all (PI):
        every step 9 fixture is satisfied.  They are a classification, and
        they detect P1 and P8.
-     Second half (next): bindings, translators (PolicyNotImplemented to
+     Second half: bindings, translators (PolicyNotImplemented to
        NotImplementedError; PolicyViolation to a Python exception class
        subclassing Exception with .failure), PolicyCheck and
        PolicyFailure classes, and a registered smoke test (R4).
+     [COMMITTED 81d4e64]
+
+     STEP 10.6, SECOND HALF (2026-11-17).  The Python bindings (R4).  The
+       bindings translate only; enforcement stays in the native require.
+     Code.
+       src/api/SplinesAPI.cpp:
+         - splines.RefinementPolicy: NFormSupport, ZeroFormSupport, EM,
+           MHD.
+         - splines.PolicyFailure, no constructor: read-only .policy,
+           .patch, .level, and .cell (a tuple).  __eq__ is the native
+           operator==, so __hash__ is None.
+         - splines.PolicyCheck, no constructor: read-only .satisfied, and
+           .failure (a copy; None when satisfied).
+         - splines.PolicyViolation, made by py::exception with Exception
+           as its only base.  One module-local translator raises it with
+           str = what() and .failure = a copy of the native record.  The
+           same translator maps PolicyNotImplemented to
+           NotImplementedError.  invalid_argument to ValueError is
+           pybind's default translator.
+         - checkRefinementPolicy(policy) and requireRefinementPolicy(policy)
+           on NavierStokesHierarchicalDiscretization and on
+           NavierStokesHierarchicalMultiPatchDiscretization.  Each calls
+           the native function, so the binding's require is the native
+           one (B6).
+       src/api/RefinementPolicy.hpp, a change to code committed in
+         81d4e64, chosen by the user 2026-11-17 (finding below):
+         PolicyViolation and PolicyNotImplemented are declared with
+         __attribute__((visibility("default"))).  Only symbol visibility
+         changes; what throws, and where, is unchanged.
+       test/RefinementPolicyBindings_smoke.py, registered in
+         test/CMakeLists.txt as python_refinement_policy_smoke_test
+         (PYTHONPATH, SKIP_RETURN_CODE 77 without numpy).
+     Inherited bindings, classified.  NURBSNavierStokesHierarchical-
+       Discretization, AdaptiveLocalNavierStokesHierarchicalDiscretization
+       and NURBSAdaptiveLocalNavierStokesHierarchicalDiscretization
+       inherit both methods from the single-patch class.  SAFE: they
+       change geometry only (NURBS weights; the AdaptiveLocal evaluator),
+       the base constructor builds L2_ss, and the methods read only
+       L2_ss.  Check J (below) runs all three.  The multipatch class
+       derives NavierStokesDiscretization, not the single-patch class, and
+       binds its own pair.
+     Finding, MEASURED: the translators did not fire.  On the first run
+       of the smoke test, both native exceptions reached Python as
+       RuntimeError: 33 problems (H 24; F 6, the raise and the two
+       .failure checks on each failing fixture; J 3).  Cause: splines is
+       compiled with -fvisibility=hidden and kept private typeinfo copies
+       of both exception types; libdiscretization exports them as weak
+       external symbols (nm -m).  libc++abi on this x86_64 macOS matches a
+       catch by typeinfo address, so catch( const api::PolicyViolation& )
+       in splines never matched a throw from libdiscretization.  A
+       diagnostic, #pragma GCC visibility push( default ) around the
+       include in SplinesAPI.cpp, gave 0 problems, with both typeinfos
+       weak external in splines, and was then removed.  The user chose
+       the attribute on the declarations, as pybind11 marks its own
+       exceptions (PYBIND11_EXPORT_EXCEPTION), over the pragma.  With the
+       attribute: 0 problems; both typeinfos are weak external in splines.
+       Any other hidden-visibility module that catches these types by type
+       relies on the same attribute.
+     Smoke test.  Degree 2, 8 x 8 unit cells, Greville control points;
+       the L2 space has degree 1, interior supports of 2 x 2 cells and
+       corner supports of one cell.  Each fixture is built in its own try,
+       and each check is recorded separately (an exception inside one is a
+       problem for that check alone).
+         single_ok   one patch; level 0 mark (0, 0)             satisfied
+         single_bad  one patch; level 0 {3,4,5}^2, level 1 (9, 8)
+                                                  fails (0, 1, (9, 8))
+         multi_ok    patch 0 [0,8]^2, patch 1 [8,16] x [0,8], S1-S0;
+                     mark (1; 7, 7)                          satisfied
+         multi_bad   the same patches; mark (1; 5, 2)
+                                                  fails (1, 0, (5, 2))
+       Checks: A availability (exit 1 if missing); B enum members; C
+       PolicyViolation.__bases__ == (Exception,) and not a RuntimeError;
+       D ok fixtures (a PolicyCheck, satisfied, failure None, require
+       returns None); E failing fixtures (not satisfied, a PolicyFailure,
+       fields as by hand, cell a tuple of ints); F require on the failing
+       fixtures (raises PolicyViolation, exact message, e.failure ==
+       check.failure, e.failure's fields as by hand); G assigning
+       failure.patch, failure.cell, check.satisfied or check.failure
+       raises AttributeError; H ZeroFormSupport, EM and MHD raise
+       NotImplementedError with the exact message from check and require
+       on all four fixtures; I RefinementPolicy(4) raises ValueError
+       "Unknown refinement policy." from check and require on both failing
+       fixtures; J the three derived classes on single_ok and single_bad:
+       check equals the base's, require raises PolicyViolation with the
+       base's failure or returns; K single_bad's failure != multi_bad's,
+       and == across copies.  73 checks, counted on a scratch copy with a
+       counter added.
+     Result, MEASURED (2026-11-17).
+       Smoke test, unmutated: 0 problems, exit 0, 0.28 s.  0 warnings in
+         the new and changed files.
+       Full ctest, one run, -j 8, after a full build from the restored
+       source (exit 0, no errors), ending 2026-11-17 08:39:15: 280/280
+       pass, 102.67 s.  Among them: all five python smoke tests, passed
+       (not skipped), python_refinement_policy_smoke_test in 0.38 s.  #30,
+       the macaroni vertices, took 101.65 s.
+     Bypass probes, MEASURED.  Predictions written 2026-11-17 before any
+       binding code (half2/predictions.txt in the session scratchpad; the
+       visibility finding came after them and changed none).  Each probe
+       was an exact single-match substitution.  The sources were restored
+       and sha256-checked after each, splines was rebuilt, and the
+       unmutated smoke test read 0 problems at the end.
+         B1  NotImplemented translator removed.  H fails, 24 checks, as
+             RuntimeError; nothing else.  As predicted.
+         B2  The .failure assignment removed (what a plain
+             py::register_exception gives).  F's two e.failure checks fail
+             on both failing fixtures (4), and J's require on single_bad
+             (3); 7 problems.  Messages and C pass.  The prediction said
+             F (2): it counted one e.failure check per fixture, but F as
+             predicted ("e.failure == check.failure, fields as by hand")
+             has two.
+         B3  PolicyViolation based on RuntimeError.  C fails (2); nothing
+             else.  As predicted.
+         B4  .cell reversed.  E's and F's field checks fail on both
+             failing fixtures (4); the native ==, J and K pass.  As
+             predicted.
+         B5  .patch and .level getters swapped.  E's and F's field checks
+             fail on both failing fixtures (4).  As predicted.
+         B6  Native require returns after a failed check (first-half P5).
+             F fails on both failing fixtures (8: no exception), and J's
+             require on single_bad (3); D, H and I pass.  As predicted.
+             This is the check that the binding's require is the native one.
+         B7  __eq__ always true.  K's != fails (1); nothing else.  As
+             predicted.
+     Observations.
+       - RefinementPolicy(4) can be constructed in Python (it shows as
+         RefinementPolicy.???), so check I reaches the native
+         std::invalid_argument.
+       - PolicyFailure is unhashable (__hash__ None), because it defines
+         __eq__.  10.8 can key by the tuple (patch, level, cell), not by
+         the record.
+       - No C++ test can see the first run's failure.  Only the splines
+         and sweeps modules are compiled with -fvisibility=hidden (the
+         build's flags.make files); no Catch2 executable is.  Only the
+         registered smoke test runs a catch inside the hidden-visibility
+         module.
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces
