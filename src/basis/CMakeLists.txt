@@ -22,6 +22,7 @@ add_library( basis SHARED
   VectorConformingHierarchicalTPSplineSpace.cpp
   VectorConformingHierarchicalMultiPatchSplineSpace.cpp
   VectorConformingMultiPatchSplineSpace.cpp
+  NFormSupportPolicy.cpp
 )
 
 target_link_libraries( basis PUBLIC util topology param )

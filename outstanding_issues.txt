@@ -2705,7 +2705,8 @@ MEDIUM PRIORITY — Architectural / Correctness
          - Support records name their function-ID space, the one the
            active ids use (hierarchicalRefinementDiagnostics).
          - src/api is compiled only into the pybind modules, so Catch2
-           cannot reach code placed there.
+           cannot reach code placed there.  OUTDATED since 1c214e1: the
+           discretization library is linked by Catch2 tests (STEP 10.5).
          - Smoke tests that pass control points need numpy in the Python
            CMake found; without it they report not run
            (SKIP_RETURN_CODE), never passed.
@@ -2715,6 +2716,9 @@ MEDIUM PRIORITY — Architectural / Correctness
          NotImplementedError needs a registered translator).
          RESOLVED 2026-11-12 (the user): an unsupported policy raises
          NotImplementedError.  Still open: the form of a P_n failure.
+         RESOLVED 2026-11-16 (the user): a typed result from the check, a
+         typed exception holding the same record from require (STEP 10.6,
+         FIRST HALF below).
      SUB-SEQUENCE, revised 2026-11-05.  Each item a separate commit and a
        half-way stop, as before.
        10.1  Documentation.  [DONE; revised 2026-11-05]
@@ -2767,6 +2771,9 @@ MEDIUM PRIORITY — Architectural / Correctness
              gate on the fixtures as measurement only.  Bypass probe: the
              check replaced by IDENTITY's (accept all) must fail a named
              failing fixture; restored byte-identical.
+             [FIRST HALF DONE 2026-11-16, awaiting review: STEP 10.6
+             below.  The step 9 gate is asserted, not measurement only
+             (R5).]
        10.7  Profiling at depth: levelActiveFunctions (COST, STEP 5 FIX),
              level construction and the validator on a deep single-patch
              hierarchy (StokesFlow allows level 7) and a multipatch one;
@@ -3414,6 +3421,230 @@ MEDIUM PRIORITY — Architectural / Correctness
        python_multipatch_amr_smoke_test, which passed (not skipped).
        #30, the macaroni vertices, took 115.11 s.
        [COMMITTED a4258b4]
+
+     STEP 10.6, FIRST HALF (2026-11-16).  The P_n validator in C++,
+       tested with Catch2; no bindings yet.
+     RULING ON THE POLICY CONTRACT (user, 2026-11-16).  Two layers.
+       - Structurally malformed input: an exception.
+       - An unsupported policy: NotImplementedError in Python
+         (PolicyNotImplemented in C++).
+       - An implemented policy, checked diagnostically: a typed result.
+       - An implemented policy, explicitly required: a typed exception
+         holding the same failure record.
+       No fallback to another or a weaker policy.  StokesFlow uses the
+       enforcing form before a solve.  The native require owns the
+       enforcement and the binding only translates; both paths share one
+       checker.  This closes "Still open: the form of a P_n failure"
+       (VETTED DECISIONS above).
+     REVIEW OF THE 10.6 PLAN (user, 2026-11-16).  Sound and ready for
+       implementation, with these refinements:
+       R1  Application policies stay out of basis.  basis has
+           checkNFormSupportPolicy and NFormSupportFailure; api has
+           RefinementPolicy, checkRefinementPolicy,
+           requireRefinementPolicy, PolicyFailure, PolicyViolation and
+           PolicyNotImplemented.
+       R2  The failure cell is a dimension-neutral index vector, ordered
+           by util::flatten over the level's cell counts, not by a
+           separately written i + n_s j.
+       R3  A valid 3D space is unsupported, not malformed: it raises
+           PolicyNotImplemented.  invalid_argument is only for an
+           invalid enum value or malformed input.
+       R4  (Second half.)  Python: PolicyCheck with .satisfied and
+           .failure (None when satisfied); PolicyFailure, read-only, with
+           .policy, .patch, .level and .cell; PolicyViolation directly
+           subclasses Exception, and its .failure equals
+           checkRefinementPolicy's.
+       R5  The step 9 cross-check is not hidden output.  On the
+           published non-exact fixture, assert the independently
+           determined P_n verdict alongside its independently measured
+           Betti numbers.  Do not assert any implication between them.
+           A case hidden for runtime reasons needs an explicit
+           certification invocation; one that only prints
+           classifications rots.  This supersedes the plan's "step 9's
+           gate on the fixtures as measurement only" (SUB-SEQUENCE 10.6).
+       R6  The probe list is written before implementation: active-only
+           L2 functions; skip the final checked level; skip a patch;
+           change the patch / level / cell order; require returns after
+           a failed check; an unsupported policy dispatched to
+           NFormSupport; index arithmetic instead of the parent
+           relation, with a fixture that tells them apart.
+       R7  "Interior" fixtures are genuinely away from the boundary, and
+           the test pins that premise.
+       Decisions confirmed: generic enum dispatch in api;
+       PolicyViolation(Exception); the step 9 fixtures classified, not
+       rebuilt, each with explicit assertions; 2D now, with a
+       dimension-neutral record and PolicyNotImplemented elsewhere.
+     Code.
+       src/basis/NFormSupportPolicy.{hpp,cpp}: checkNFormSupportPolicy
+         for HierarchicalTPSplineSpace (patch 0) and
+         HierarchicalMultiPatchSplineSpace (each constituent in patch
+         order), returning std::optional<NFormSupportFailure{patch,
+         level, cell}>.  Per patch, R_l comes from the parent relation:
+         the level 0 cells, then cmap.iterateChildren of each non-leaf
+         cell (mRefinementRatios, so any ratio).  U_l is the union of
+         the tensorCellSupports of every level l function, active or
+         not, whose cells all lie in R_l.  The first cell of R_l \ U_l by
+         flattened id (std::set; util::flatten, first index fastest) is
+         the failure.  A 2d guard throws NFormSupportNotImplemented
+         (std::logic_error), "The n-form support policy is implemented
+         only for 2d spaces.".  The code below the guard is written
+         dimension-neutral; P8 MEASURED that without the guard a 3D space
+         returns a verdict.  The guard stays until 3D has fixtures.
+       src/api/RefinementPolicy.{hpp,cpp}: RefinementPolicy
+         {NFormSupport, ZeroFormSupport, EM, MHD}; PolicyFailure{policy,
+         patch, level, cell}; PolicyCheck{failure; satisfied()};
+         PolicyViolation (std::runtime_error, failure()); PolicyNotImplemented
+         (std::logic_error); policyName.  checkRefinementPolicy and
+         requireRefinementPolicy for both hierarchical discretizations,
+         on disc.L2_ss.  check switches on the enum: NFormSupport calls
+         the basis check and rethrows NFormSupportNotImplemented as
+         PolicyNotImplemented; ZeroFormSupport, EM and MHD throw
+         PolicyNotImplemented "Refinement policy X is not implemented."
+         before any check; a value outside the enum falls out of the
+         switch to std::invalid_argument "Unknown refinement policy.".
+         require is check, then throw PolicyViolation( *failure ):
+         "Refinement policy NFormSupport is violated on patch P, level L,
+         cell (i, j).".  The basis-to-api translation is not reachable
+         through either discretization (both are 2D), so it is not tested
+         or probed.
+       CMake: NFormSupportPolicy.cpp joins basis; RefinementPolicy.cpp
+         joins the discretization library; NFormSupportPolicy_test links
+         discretization.
+     Tests, test/NFormSupportPolicy_test.cpp, 8 cases, tag
+       [nform_policy].  Oracle built by the test: per patch and level,
+       the breaks refined by the level's ratios; open knot vectors of
+       degree q = p - 1; each function's support from its knot spans;
+       R_l the level l marks; first uncovered cell, first index fastest.
+       Each fixture is checked separately (a throw in one does not hide
+       the others), at p = 2 and 3 unless said, and asserts:
+         - premise: the hierarchy's leaves (leafElementInfos) equal the
+           leaves built from the marks, so R_l is the marks;
+         - premise, on the fixture's interior levels: every oracle
+           support meeting the marks has (q + 1)^2 cells, and there are
+           marks (R7);
+         - the oracle equals the hand value (where one is written), and
+           the check equals the oracle;
+         - require throws PolicyViolation whose failure() equals the
+           check's, or returns iff the check is satisfied.
+       Fixtures (8 x 8 patches; hand values):
+         corner (0,0)               satisfied
+         edge (3,0)                 fails (0, 0, (3, 0))
+         interior (3,3)             fails (0, 0, (3, 3))            interior level 0
+         block2 {3,4}^2             p = 2 satisfied; p = 3 fails (0, 0, (3, 3))
+         block3 {3,4,5}^2           satisfied                       interior level 0
+         antidiagonal (5,2), (2,5)  fails (0, 0, (5, 2))            interior level 0
+         three levels: block3, then level 1 (8,8)
+                                    fails (0, 1, (8, 8))            interior levels 0, 1
+         patch 1 alone, S1-S0, (1; 3,3)        fails (1, 0, (3, 3))
+         ordering: patch 0 block3 and level 1 (8,8); patch 1 (3,3)
+                                               fails (0, 1, (8, 8))
+         renumbered: patch 1 alone, patches swapped
+                                               fails (0, 0, (3, 3))
+         turned: patch 1 turned by pi, S1-S1, (1; 4,4)
+                                               fails (1, 0, (4, 4))
+         the four 10.5 layouts (side by side, stacked, half turn,
+           quarter turn): oracle only, no hand value.
+       Cases:
+         1  single patch: the seven one-patch fixtures through
+            NavierStokesHierarchicalDiscretization.
+         2  multipatch: the 10.5 layouts, the one-patch fixtures, and the
+            four two-patch fixtures, through the multipatch
+            discretization.
+         3  patch-local numbering: patch 1 alone, renumbered and turned
+            mark the same physical cell, [11, 12] x [3, 4]; the failing
+            cell, mapped by the fixture's affine map, lands there.
+         4  refinement ratio 3: q = 1, levels 2, 6 and 12 cells a side
+            (refinementRatios checked, {{3, 3}, {2, 2}}); marks (0,0),
+            then (2,2) at level 1; fails (0, 1, (2, 2)); interior level 1.
+            Dyadic index arithmetic finds level 1 children {0,1}^2 and
+            misses the (2,2) refinement.
+         5  PolicyViolation's message on three levels at p = 2.
+         6  ZeroFormSupport, EM and MHD: check and require each throw
+            PolicyNotImplemented with the exact message, on four
+            NFormSupport controls (corner single and multipatch
+            satisfied; interior single and patch 1 alone not satisfied).
+            The controls were added beyond the plan, so that a check
+            dispatched to NFormSupport is seen on both verdicts.
+         7  static_cast<RefinementPolicy>( 4 ): policyName, and check and
+            require on both discretizations, throw std::invalid_argument
+            "Unknown refinement policy.".
+         8  basis level: a two-level corner-refined space in 2D (no
+            throw) and 3D (the guard's message).
+     Tests, test/SharedInterfaceRefinement_test.cpp, 2 cases beside the
+       Betti case (R5); the validated cases are unedited.
+         "P_n on the step 9 layouts: satisfied in 2D, not implemented in
+         3D": every contractible layout and its unrefined copy, and the
+         rings of eight (refined and not), each built h1 -> hdiv -> l2.
+         2D: premise, the L2 leaves equal the placed keys; R_0 from the
+         layout's refined cells; premise, R_0 is nonempty iff the layout
+         is refined; the oracle (degree 1 supports from the cell counts,
+         first uncovered) and the hand value both "satisfied"; the check
+         equals them.  3D: the guard's message.  Counts asserted: 38 2D
+         (19 refined), 28 3D.
+         "Published non-exact hierarchy: the P_n verdict and the Betti
+         numbers, each determined independently": the two squares,
+         unrefined and refined (betti / bc_betti {1,0,0} / {0,0,1} and
+         {1,1,0} / {0,1,1}, the step 9 measurements).  The P_n block (premise: the parents of the level 1
+         L2 leaves are the cells [1,4)^2 u [3,6)^2 when refined, none
+         unrefined; oracle, hand value
+         "satisfied", check) and the Betti block (the existing
+         complexOutcomes and complexProblems) run in separate try
+         blocks and are asserted by separate CHECKs.  No implication
+         between them is asserted.
+     Result, MEASURED (2026-11-16).
+       NFormSupportPolicy_test: 87 assertions in 8 test cases, green,
+         0.49 s.  The two step 9 cases: 7 assertions, green, 1.12 s and
+         0.27 s.  0 warnings in the new files.
+       Full ctest, one run, -j 8, after a full build from the restored
+       source (exit 0, no errors), ending 2026-11-16 18:08:29: 279/279
+       pass, 105.49 s.  Among them: all four python smoke tests, passed
+       (not skipped).  #30, the macaroni vertices, took 104.06 s.
+     Bypass probes, MEASURED.  Predictions written before any 10.6 code
+       (P1-P8), with an addendum before any probe ran (new case names,
+       the TC4 controls) and a second before PI ran.  Each probe was an
+       exact single-match substitution; the sources were restored and
+       sha256-checked after each, and the tests rebuilt and run
+       unmutated at the end.
+         P1   U_l from active functions only.  Fails cases 1, 2, 4, 5, 6
+              (the satisfied controls) and both step 9 cases (19 refined
+              2D layouts; the P_n CHECK, not the Betti CHECK).  Every
+              satisfied fixture with marks reads a failure.
+         P2   Skip the final checked level.  Fails 1, 2, 3, 4, 5, 6 (the
+              unsatisfied controls); step 9 cases pass.
+         P3a  Skip the last patch.  Fails 2, 3, 6 (patch 1 alone).
+              Per fixture, not predicted: stacked and half turn (p = 2
+              and 3), whose failures are on patch 1, also read
+              satisfied.
+         P3b  Skip the first patch.  Fails 2 (ordering reads (1, 0,
+              (3, 3))) and 3 (renumbered).
+         P4a  Level-major order across patches.  Fails 2 only, on
+              ordering: (1, 0, (3, 3)).
+         P4b  Last index fastest.  Fails 1 and 2 on antidiagonal:
+              (0, 0, (2, 5)).
+         P4c  Last uncovered cell.  Fails 1 and 2 on antidiagonal (2, 5)
+              and block2 p = 3 (4, 4).
+         P5   require returns after a failed check.  Fails 1 and 2 on
+              every failing fixture, and 5 ("no exception").
+         P6   ZeroFormSupport, EM, MHD dispatched to NFormSupport.  Fails
+              6 only: check returns a result; require on the failing
+              controls throws a PolicyViolation labelled with the
+              requested policy ("Refinement policy ZeroFormSupport is
+              violated ...").  Case 7 passes.
+         P7   Dyadic index arithmetic for children.  Fails 4 only.
+         P8   2d guard removed.  Fails 8 and the step 9 layout case (3D
+              returns a verdict, "no exception").
+         PI   Accept all (firstFailure returns empty; guard kept).
+              Fails 1-6; 7, 8 and both step 9 cases pass.
+       Every outcome matched its written prediction per case.  Per
+       fixture: P3a's four 10.5 fixtures above were not predicted; for P1
+       and P2 the prediction for case 2 said "likewise" and did not list
+       the 10.5 layouts.  The step 9 cases cannot detect accept-all (PI):
+       every step 9 fixture is satisfied.  They are a classification, and
+       they detect P1 and P8.
+     Second half (next): bindings, translators (PolicyNotImplemented to
+       NotImplementedError; PolicyViolation to a Python exception class
+       subclassing Exception with .failure), PolicyCheck and
+       PolicyFailure classes, and a registered smoke test (R4).
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces

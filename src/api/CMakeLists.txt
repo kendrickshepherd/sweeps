@@ -13,7 +13,7 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable( pybind11 )
 
-add_library( discretization SHARED NavierStokesDiscretization.cpp )
+add_library( discretization SHARED NavierStokesDiscretization.cpp RefinementPolicy.cpp )
 target_link_libraries( discretization PUBLIC basis eval )
 target_include_directories( discretization PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} )
 

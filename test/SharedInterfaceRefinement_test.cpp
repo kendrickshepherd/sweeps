@@ -9,6 +9,7 @@
 #include <TraceMesh.hpp>
 #include <VectorConformingHierarchicalMultiPatchSplineSpace.hpp>
 #include <MultiPatchSplineSpace.hpp>
+#include <NFormSupportPolicy.hpp>
 #include <ParentPoint.hpp>
 #include <SideCoordinateTransform.hpp>
 #include <SplineSpaceEvaluator.hpp>
@@ -3668,6 +3669,210 @@ TEST_CASE( "Discrete complex on a published non-exact hierarchy: Betti numbers p
     CHECK( harmonic_one_forms == std::vector<long>{ 1, 1 } );
     INFO( joined( problems ) );
     CHECK( problems.empty() );
+}
+
+namespace
+{
+    // Item 1, step 10.6: P_n on the step 9 fixtures.  The oracle takes R_0 from the placed leaves and the level 0
+    // L2 supports of degree 1 on n cells per axis: function k spans the cells max( 0, k - 1 ) to min( n - 1, k ).
+    using PolicyCell = std::vector<size_t>;
+    using PolicyVerdict = std::optional<std::pair<size_t, PolicyCell>>; // patch, level 0 cell
+
+    PolicyVerdict firstUncovered( const std::vector<std::set<PolicyCell>>& refined_per_patch, const size_t n )
+    {
+        for( size_t patch = 0; patch < refined_per_patch.size(); patch++ )
+        {
+            const std::set<PolicyCell>& refined = refined_per_patch.at( patch );
+            std::set<PolicyCell> covered;
+            for( size_t a = 0; a <= n; a++ )
+                for( size_t b = 0; b <= n; b++ )
+                {
+                    std::set<PolicyCell> support;
+                    for( size_t i = ( a == 0 ? 0 : a - 1 ); i <= std::min( n - 1, a ); i++ )
+                        for( size_t j = ( b == 0 ? 0 : b - 1 ); j <= std::min( n - 1, b ); j++ ) support.insert( { i, j } );
+                    if( std::includes( refined.begin(), refined.end(), support.begin(), support.end() ) )
+                        covered.insert( support.begin(), support.end() );
+                }
+            std::optional<PolicyCell> first;
+            for( const PolicyCell& c : refined )
+                if( not covered.contains( c ) and
+                    ( not first or std::pair{ c.at( 1 ), c.at( 0 ) } < std::pair{ first->at( 1 ), first->at( 0 ) } ) )
+                    first = c;
+            if( first ) return std::pair{ patch, *first };
+        }
+        return std::nullopt;
+    }
+
+    std::string describe( const PolicyVerdict& v )
+    {
+        if( not v ) return "satisfied";
+        std::string cell;
+        for( const size_t i : v->second ) cell += ( cell.empty() ? "" : "," ) + std::to_string( i );
+        return "fails on patch " + std::to_string( v->first ) + ", level 0, cell (" + cell + ")";
+    }
+
+    // The implementation's verdict; a failure off level 0 cannot occur in a two level hierarchy and is reported.
+    PolicyVerdict implementedVerdict( const HierarchicalMultiPatchSplineSpace& l2, std::vector<std::string>& problems,
+                                      const std::string& where )
+    {
+        const std::optional<NFormSupportFailure> f = checkNFormSupportPolicy( l2 );
+        if( not f ) return std::nullopt;
+        if( f->level != 0 ) problems.push_back( where + "a failure on level " + std::to_string( f->level ) );
+        return std::pair{ f->patch, PolicyCell( f->cell.begin(), f->cell.end() ) };
+    }
+
+    std::set<LeafKey> l2LeafKeys( const HierarchicalMultiPatchSplineSpace& l2 )
+    {
+        std::set<LeafKey> out;
+        for( const auto& info : leafElementInfos( l2.basisComplex().parametricAtlas().cmap() ) )
+        {
+            LeafKey k{ info.level, info.patch };
+            k.insert( k.end(), info.indices.begin(), info.indices.end() );
+            out.insert( k );
+        }
+        return out;
+    }
+}
+
+TEST_CASE( "P_n on the step 9 layouts: satisfied in 2D, not implemented in 3D", "[shared_interface_refinement]" )
+{
+    // By hand, 2D: each patch has 2 x 2 level 0 cells, each the support of a corner L2 function of degree 1, so
+    // every R_0 is covered.  3D: a valid space the check does not implement.
+    std::vector<PlacedLayout> layouts;
+    for( const PlacedLayout& layout : contractibleLayouts() )
+    {
+        layouts.push_back( layout );
+        layouts.push_back( unrefined( layout ) );
+    }
+    for( const size_t dim : { 2, 3 } )
+        for( const bool refined : { false, true } ) layouts.push_back( ringLayout( dim, refined ) );
+    size_t n_2d = 0, n_2d_refined = 0, n_3d = 0;
+    std::vector<std::string> problems;
+    for( const PlacedLayout& layout : layouts )
+    {
+        const std::string where = layout.name + ": ";
+        const size_t dim = layout.patches.front().rotation.size();
+        try
+        {
+            const std::vector<PlacedLeaf> leaves = placedLeaves( layout );
+            const LayoutHierarchy hierarchy = placedHierarchy( layout, leaves );
+            const HierarchicalMultiPatchSplineSpace h1 = buildHierarchicalSplineSpace( hierarchy.levels, hierarchy.leaves );
+            const VectorConformingHierarchicalMultiPatchSplineSpace hdiv = buildHDivHierarchicalMultiPatchSplineSpace( h1 );
+            const HierarchicalMultiPatchSplineSpace l2 = buildL2HierarchicalMultiPatchSplineSpace( hdiv );
+            if( dim == 3 )
+            {
+                n_3d++;
+                std::string got = "no exception";
+                try
+                {
+                    checkNFormSupportPolicy( l2 );
+                }
+                catch( const NFormSupportNotImplemented& e )
+                {
+                    got = e.what();
+                }
+                if( got != "The n-form support policy is implemented only for 2d spaces." )
+                    problems.push_back( where + got );
+                continue;
+            }
+            n_2d++;
+            std::set<LeafKey> placed;
+            for( const PlacedLeaf& leaf : leaves ) placed.insert( leaf.key );
+            if( l2LeafKeys( l2 ) != placed ) problems.push_back( where + "the L2 leaves are not the placed leaves" );
+            std::vector<std::set<PolicyCell>> refined( layout.patches.size() );
+            for( const PlacedLeaf& leaf : leaves )
+                if( leaf.key.at( 0 ) == 1 )
+                    refined.at( leaf.key.at( 1 ) )
+                        .insert( { size_t( std::floor( 2 * leaf.patch_lo( 0 ) + 1e-9 ) ),
+                                   size_t( std::floor( 2 * leaf.patch_lo( 1 ) + 1e-9 ) ) } );
+            const bool any_refined =
+                std::any_of( refined.begin(), refined.end(), []( const auto& r ) { return not r.empty(); } );
+            if( any_refined == layout.refined.empty() ) problems.push_back( where + "R_0 is not the requested refinement" );
+            if( any_refined ) n_2d_refined++;
+            const PolicyVerdict expected = firstUncovered( refined, 2 );
+            if( expected ) problems.push_back( where + "the oracle " + describe( expected ) + ", by hand satisfied" );
+            const PolicyVerdict got = implementedVerdict( l2, problems, where );
+            if( got != expected )
+                problems.push_back( where + "got " + describe( got ) + ", expected " + describe( expected ) );
+        }
+        catch( const std::exception& e )
+        {
+            problems.push_back( where + e.what() );
+        }
+    }
+    CHECK( n_2d == 2 * ( 16 + 2 ) + 2 );
+    CHECK( n_2d_refined == 16 + 2 + 1 );
+    CHECK( n_3d == 2 * ( 10 + 3 ) + 2 );
+    INFO( joined( problems ) );
+    CHECK( problems.empty() );
+}
+
+TEST_CASE( "Published non-exact hierarchy: the P_n verdict and the Betti numbers, each determined independently",
+           "[shared_interface_refinement]" )
+{
+    // P_n by hand: refined, R_0 is the elements in [1,4]^2 and [3,6]^2, two 3 x 3 blocks, each the union of the
+    // 2 x 2 supports of the interior degree 1 L2 functions inside it; unrefined, R_0 is empty.  The Betti numbers
+    // are the step 9 measurements.  Neither result is derived from the other.
+    struct Expected
+    {
+        bool refined;
+        std::vector<long> betti, bc_betti;
+    };
+    const std::vector<Expected> fixtures = { { false, { 1, 0, 0 }, { 0, 0, 1 } }, { true, { 1, 1, 0 }, { 0, 1, 1 } } };
+    std::vector<std::string> policy_problems, betti_problems;
+    size_t chains = 0;
+    for( const Expected& e : fixtures )
+    {
+        const std::string name = e.refined ? "two squares" : "two squares, unrefined";
+        try
+        {
+            const HierarchicalMultiPatchSplineSpace h1 = twoSquaresH1( e.refined );
+            const VectorConformingHierarchicalMultiPatchSplineSpace hdiv = buildHDivHierarchicalMultiPatchSplineSpace( h1 );
+            const HierarchicalMultiPatchSplineSpace l2 = buildL2HierarchicalMultiPatchSplineSpace( hdiv );
+            std::set<PolicyCell> r0;
+            for( size_t s = 0; s < 7; s++ )
+                for( size_t t = 0; t < 7; t++ )
+                    if( e.refined and ( ( 1 <= s and s < 4 and 1 <= t and t < 4 ) or ( 3 <= s and s < 6 and 3 <= t and t < 6 ) ) )
+                        r0.insert( { s, t } );
+            std::set<PolicyCell> parents;
+            for( const LeafKey& k : l2LeafKeys( l2 ) )
+                if( k.at( 0 ) == 1 ) parents.insert( { k.at( 2 ) / 2, k.at( 3 ) / 2 } );
+            if( parents != r0 ) policy_problems.push_back( name + ": R_0 is not the figure's" );
+            const PolicyVerdict expected = firstUncovered( { r0 }, 7 );
+            if( expected ) policy_problems.push_back( name + ": the oracle " + describe( expected ) + ", by hand satisfied" );
+            const PolicyVerdict got = implementedVerdict( l2, policy_problems, name + ": " );
+            if( got != expected )
+                policy_problems.push_back( name + ": got " + describe( got ) + ", expected " + describe( expected ) );
+        }
+        catch( const std::exception& ex )
+        {
+            policy_problems.push_back( name + ": " + ex.what() );
+        }
+        try
+        {
+            const HierarchicalMultiPatchSplineSpace h1 = twoSquaresH1( e.refined );
+            for( const auto& [chain_name, o] : complexOutcomes( name, h1, h1, std::array<double, 2>{ 0, 7 } ) )
+            {
+                const std::vector<std::string> p =
+                    complexProblems( name + ", " + chain_name + ": ", o, e.betti, e.bc_betti );
+                betti_problems.insert( betti_problems.end(), p.begin(), p.end() );
+                chains++;
+            }
+        }
+        catch( const std::exception& ex )
+        {
+            betti_problems.push_back( name + ": " + ex.what() );
+        }
+    }
+    CHECK( chains == 2 * 2 );
+    {
+        INFO( joined( policy_problems ) );
+        CHECK( policy_problems.empty() );
+    }
+    {
+        INFO( joined( betti_problems ) );
+        CHECK( betti_problems.empty() );
+    }
 }
 
 TEST_CASE( "Discrete complex: a zero differential has composition residual zero", "[shared_interface_refinement]" )
