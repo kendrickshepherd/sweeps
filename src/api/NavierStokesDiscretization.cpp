@@ -4,6 +4,7 @@
 #include <IndexOperations.hpp>
 #include <HierarchicalTPSplineSpace.hpp>
 #include <CombinatorialMapMethods.hpp>
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
@@ -168,8 +169,23 @@ namespace api
         const basis::KnotVector& kv_t,
         const size_t degree_s,
         const size_t degree_t,
-        const std::vector<std::vector<std::pair<size_t, size_t>>>& elems_to_refine )
+        const std::vector<std::vector<std::pair<size_t, size_t>>>& elems_to_refine,
+        const size_t new_knot_multiplicity )
     {
+        if( new_knot_multiplicity == 0 || new_knot_multiplicity > std::min( degree_s, degree_t ) )
+            throw std::invalid_argument( "New knot multiplicity must be between 1 and the parent degree." );
+
+        const auto refine_knots = [new_knot_multiplicity]( const basis::KnotVector& kv ) {
+            if( new_knot_multiplicity == 1 ) return basis::dyadicRefine( kv );
+            const auto& knots = kv.uniqueKnotMultiplicities();
+            std::vector<std::pair<double, size_t>> refined{ knots.front() };
+            for( size_t j = 1; j < knots.size(); ++j )
+            {
+                refined.push_back( { 0.5 * ( knots[j - 1].first + knots[j].first ), new_knot_multiplicity } );
+                refined.push_back( knots[j] );
+            }
+            return basis::KnotVector( refined );
+        };
         std::vector<std::shared_ptr<const basis::TPSplineSpace>> refinement_levels;
         refinement_levels.reserve( elems_to_refine.size() + 1 );
 
@@ -180,8 +196,8 @@ namespace api
 
         for( size_t i = 0; i < elems_to_refine.size(); i++ )
         {
-            kvs.at( 0 ) = basis::dyadicRefine( kvs.at( 0 ) );
-            kvs.at( 1 ) = basis::dyadicRefine( kvs.at( 1 ) );
+            kvs.at( 0 ) = refine_knots( kvs.at( 0 ) );
+            kvs.at( 1 ) = refine_knots( kvs.at( 1 ) );
             refinement_levels.push_back( std::make_shared<const basis::TPSplineSpace>(
                 basis::buildBSpline( kvs, degrees ) ) );
         }
@@ -237,8 +253,9 @@ namespace api
         const size_t degree_s,
         const size_t degree_t,
         const Eigen::MatrixXd& unrefined_cpts,
-        const std::vector<std::vector<std::pair<size_t, size_t>>>& elems_to_refine )
-        : H1_ss( buildHierarchicalH1( kv_s, kv_t, degree_s, degree_t, elems_to_refine ) ),
+        const std::vector<std::vector<std::pair<size_t, size_t>>>& elems_to_refine,
+        const size_t new_knot_multiplicity )
+        : H1_ss( buildHierarchicalH1( kv_s, kv_t, degree_s, degree_t, elems_to_refine, new_knot_multiplicity ) ),
           HDIV_ss( buildHDIV( H1_ss ) ),
           L2_ss( buildL2( H1_ss.basisComplex().parametricAtlasPtr(), HDIV_ss ) ),
           cmap_bdry( H1_ss.basisComplex().parametricAtlas().cmap() ),

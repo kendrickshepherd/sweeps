@@ -116,7 +116,8 @@ namespace api
                                                 const size_t degree_s,
                                                 const size_t degree_t,
                                                 const Eigen::MatrixXd& unrefined_cpts,
-                                                const std::vector<std::vector<std::pair<size_t, size_t>>>& elems_to_refine );
+                                                const std::vector<std::vector<std::pair<size_t, size_t>>>& elems_to_refine,
+                                                size_t new_knot_multiplicity = 1 );
 
         virtual ~NavierStokesHierarchicalDiscretization() = default;
 

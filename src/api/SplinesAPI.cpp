@@ -636,7 +636,8 @@ PYBIND11_MODULE( splines, m )
                        const size_t,
                        const size_t,
                        const Eigen::MatrixXd&,
-                       const std::vector<std::vector<std::pair<size_t, size_t>>>>(),
+                       const std::vector<std::vector<std::pair<size_t, size_t>>>,
+                       const size_t>(),
               "Create a B-spline discretization for Navier Stokes problems, consisting of an H1 spline space with the "
               "given knot vectors, an HDiv spline space taking the H1 space as its primal basis, and an L2 spline "
               "space, which has reduced degree from H1 in both directions. The geometry is defined by the H1 space and "
@@ -646,7 +647,8 @@ PYBIND11_MODULE( splines, m )
               "degree_s"_a,
               "degree_t"_a,
               "control_points"_a,
-              "elems_to_refine"_a )
+              "elems_to_refine"_a,
+              "new_knot_multiplicity"_a = 1 )
         .def(
             "activeLeafElementInfo",
             []( const api::NavierStokesHierarchicalDiscretization& nsd ) {
@@ -994,7 +996,8 @@ PYBIND11_MODULE( splines, m )
                        const size_t,
                        const size_t,
                        const Eigen::MatrixXd&,
-                       const std::vector<std::vector<std::pair<size_t, size_t>>>>(),
+                       const std::vector<std::vector<std::pair<size_t, size_t>>>,
+                       const size_t>(),
               "Create a hierarchical Navier-Stokes discretization for the adaptive local refinement path. The marked "
               "cells are expected to come from a fixed parametric adaptive selector on the Python side. This class "
               "currently reuses the compatible hierarchical backend.",
@@ -1003,7 +1006,8 @@ PYBIND11_MODULE( splines, m )
               "degree_s"_a,
               "degree_t"_a,
               "control_points"_a,
-              "elems_to_refine"_a );
+              "elems_to_refine"_a,
+              "new_knot_multiplicity"_a = 1 );
 
     py::class_<api::NURBSAdaptiveLocalNavierStokesHierarchicalDiscretization, api::NURBSNavierStokesHierarchicalDiscretization>(
         m, "NURBSAdaptiveLocalNavierStokesHierarchicalDiscretization" )
