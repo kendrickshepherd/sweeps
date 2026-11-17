@@ -2779,7 +2779,9 @@ MEDIUM PRIORITY — Architectural / Correctness
              hierarchy (StokesFlow allows level 7) and a multipatch one;
              decide whether any needs work before the loop relies on it.
              [FIRST HALF DONE 2026-11-17, measurement only.  B1 and B2
-             reviewed, awaiting commit; C not started.  STEP 10.7 below.]
+             committed b99440c.  C reference tests and opt-in benchmark
+             verified, awaiting review; optimization not started.
+             STEP 10.7 below.]
        10.8  StokesFlow-side integration test, in that repository and
              committed there: estimate, mark, grade, close, construct in
              Sweeps, validate P_n, every cycle.  Single patch first;
@@ -4036,7 +4038,7 @@ MEDIUM PRIORITY — Architectural / Correctness
        not done before 10.8.  A is defensible: nothing measured blocks
        10.8.
 
-     STEP 10.7, B1 AND B2 (2026-11-17).  Reviewed, awaiting commit.
+     STEP 10.7, B1 AND B2 (2026-11-17).  Committed b99440c.
        User requested two output-preserving optimizations, measured
        separately: B1 caches BSplineSpace1d's function count; B2 reuses
        one global extraction operator for element and vertex data.
@@ -4157,6 +4159,129 @@ MEDIUM PRIORITY — Architectural / Correctness
        were made for the closeout, and nothing is staged or committed.
        Closeout build and test logs:
          /private/tmp/sweeps-b1-b2-closeout.ODZNyx.
+     [COMMITTED b99440c]
+
+     STEP 10.7, C REFERENCE TESTS AND BENCHMARK (2026-11-17).
+       Preparation only.  No production optimization or new topology
+       query; B3 and D are not part of this change.  Nothing staged or
+       committed.  The src tree matches b99440c after the probes below.
+     Reference and comparison.
+       test/support/ThbActivityReference.hpp freezes the full-domain
+       levelActiveFunctions algorithm from b99440c.  It does not include
+       or call ThbActiveFunctions.hpp.  Preserve it when optimizing C.
+       It is an equivalence reference, not a proof of THB correctness.
+       ThbActivityChecks.hpp compares exact per-level ids from that
+       reference against BOTH the direct production helper and the
+       constructor's stored functions.  Scalar ids must also retain
+       their strictly increasing order.  Equal counts are not enough.
+       A mismatch throws, with the level and missing/extra ids.
+     Routine tests, test/ThbActivityReference_test.cpp.
+       H1, H(div), H(curl) and L2, single and multipatch, 2D and 3D.
+       Degrees 1-3; no refinement and unused levels; uniform refinement;
+       nonuniform knots; anisotropic and non-dyadic ratios (including 3);
+       C0 knots and their broken reduced spaces; three-level jumps of 2;
+       fixed mt19937 seeds 17, 1729 and 8675309; independently selected
+       leaves at reversed/swapped two-patch interfaces and four-patch
+       junctions.  Requested leaf indices are checked against the built
+       hierarchy.  Nontrivial axis transforms and asymmetric random
+       leaf counts are asserted, not inferred from fixture names.
+       Single-patch components also use an independent support oracle:
+       raw knot intervals, known refinement ratios and requested leaves;
+       no connectivity, child traversal or activity helper.  The jump
+       fixture pins the excluded level-1 first-direction id 3 and the
+       hand-derived surviving counts.  Existing SIR support-containment
+       and conformity tests remain independent regression gates.
+       Global multipatch comparisons use existing function maps; they
+       do not independently prove merging/signs or general exactness.
+       Controls refuse equal-sized wrong sets and a space constructed
+       with explicitly wrong active ids while the direct helper is good.
+     Reproducible opt-in measurements.
+       benchmarks/ThbActivity_benchmark.cpp builds as the explicit
+       thb_activity_benchmark target, EXCLUDE_FROM_ALL and not in ctest.
+       F1, F1n, F1w and F2 preserve the original degree-3 profiling
+       fixtures, depth 0-7.  The CMake compiler/build settings are used,
+       with the actual compiler version reported by the binary.
+       All runs enforce NFormSupportPolicy and the exact comparisons
+       before reporting success.  H1/H(div)/L2 match the old timing
+       scope; H(curl) is in the routine reference tests instead.
+       benchmarks/run_thb_activity.py builds that target before running
+       fresh serial processes.  Quick/default: depths 0 and 2 once.
+       Full: depths 0-7, three repeats.  Fixture/depth/repeat overrides
+       permit the historical level-7 baseline without a full sweep.
+       JSON records constructor and policy time, separate warm reference
+       and direct-helper time, counts, nonzeros, comparison levels,
+       activity fingerprint, peak RSS, git state, platform, compiler
+       settings, and source/artifact SHA-256.  Peak RSS is not retained
+       allocation.  Exact sets, not fingerprints, are the gate.
+       Nonfinite/negative timings, changed repeat invariants, failed
+       children or changes to inputs/artifacts/git state refuse a run.
+       The runner also refuses a build configured from another checkout
+       and source changes during its pre-measurement build.  JSON reports
+       belong outside the checkout to avoid making a clean tree dirty.
+       Dirty runs are labelled, not presented as clean certification.
+       test/ThbActivityBenchmarkRunner_test.py tests record validation
+       and repeat equivalence using only Python's standard library.
+       It is registered with ctest; the expensive native benchmark is
+       not.  Commands and evidence limits are in benchmarks/README.md.
+     Probes, predictions recorded before execution, MEASURED.
+       P1: erase one id from each nonempty production helper result.
+         This changes both production constructor and direct paths.
+         The frozen reference stays unchanged.  All five reference
+         cases fail (47 failed assertions in the initial test version).
+         Native F1 depth 0 and the Python runner each exit 1, reporting
+         H1 level 0 expected 100, got 99, missing 0.  Both stdout JSON
+         files are empty: neither publishes a successful record.
+       P2: bypass the equality guard in the test-only comparison.
+         Initial run: one failure; fatal FAIL in the equal-size control
+         hid the constructor-only control.  Replaced both with nonfatal
+         FAIL_CHECK, predicted both messages, and repeated the probe:
+         both controls fail, exit 2.  Other reference cases still pass.
+       Both edited headers are restored and SHA-256 equal their pre-probe
+       versions.  No production file remains changed.  Logs:
+         /private/tmp/sweeps-c-reference.b8q2U5.
+     Final verification, MEASURED (2026-11-17).
+       Reference suite: 108 assertions in 5 cases, all pass, about 0.5 s.
+       Python runner validation: 11 unit tests, all pass.  This includes
+       main refusing another checkout before launching a build, and
+       refusing source changes during a build before measuring anything.
+       Native CLI: help exits 0; missing args, an unknown fixture, depths
+       -1 and 8, and malformed depth 1x each exit 1.
+       Full normal build: exit 0, zero error/warning lines.  Full ctest,
+       one run, -j 8 under caffeinate -i: 288/288 pass, zero failures,
+       exit 0, 95.77 s.  The prior 282 plus five reference cases and one
+       fast Python runner test; no expensive benchmark is in ctest.
+       All five existing Python import/smoke tests run and pass, with
+       none skipped.  Macaroni vertex tracing passes in 94.47 s.
+       git diff --check is clean.  Added C++/Python lines are at most 120
+       columns, added ledger lines at most 80.  src has no diff from
+       b99440c; the production helper and frozen header match their
+       pre-probe SHA-256 values.  No staging or commit.
+     Final benchmark reports, MEASURED, restored source.
+       quick-final.json: all four fixtures, depths 0 and 2, two repeats,
+       16 fresh processes.  depth7-final.json: all four fixtures, depth 7,
+       three repeats, 12 fresh processes.  Both runners exit 0; all exact
+       comparisons and repeat invariants pass.  Source/artifact/git
+       checks pass, with this uncommitted tree explicitly labelled dirty.
+       These are development baselines, not clean-tree certification.
+       Constructor, reference and direct-helper seconds, medians at L7:
+                        constructor       frozen       direct
+         F1                5.2893         2.1669       2.1572
+         F1n               3.8335         1.5840       1.5676
+         F1w               5.8382         2.8367       2.7357
+         F2               13.0430         6.2460       6.3574
+       Reference/direct timings are separate post-construction work,
+       not part of constructor time.  Machine variance precludes reading
+       differences from earlier sessions as a new optimization gain.
+       Leaves and extraction nonzeros match the historical fixtures:
+         F1    385 / 53236922;    F1n  372 / 39533657;
+         F1w  4297 / 52658876;    F2   770 / 106473844.
+       F1/F1n/F1w compare 32 scalar-component levels each; F2 compares
+       24 global multipatch levels per process.  Runtime, source hashes,
+       native compiler version, CMake flags and peak memory are recorded
+       in the JSON.  The final runner includes the build-checkout guard.
+       The full 0-7 sweep remains available on demand; not run here.
+       Reports and logs:
+         /private/tmp/sweeps-c-reference.b8q2U5.
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces

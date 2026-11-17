@@ -59,6 +59,15 @@ add_my_test(IndexOperations_test)
 add_my_test(HierarchicalTPCMap_test)
 add_my_test(HierarchicalTPPAtlas_test)
 add_my_test(HierarchicalTPSplineSpace_test)
+add_my_test(ThbActivityReference_test)
+
+# Explicitly built and run on demand, never registered with ctest or included in the default build.
+add_executable( thb_activity_benchmark EXCLUDE_FROM_ALL ../benchmarks/ThbActivity_benchmark.cpp )
+target_include_directories( thb_activity_benchmark PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} )
+target_link_libraries( thb_activity_benchmark PRIVATE discretization )
+target_compile_definitions( thb_activity_benchmark PRIVATE
+    THB_BENCH_COMPILER="${CMAKE_CXX_COMPILER}"
+    THB_BENCH_BUILD_TYPE="${CMAKE_BUILD_TYPE}" )
 add_my_test(HierarchicalAmrQueries_test)
 target_link_libraries( HierarchicalAmrQueries_test PRIVATE discretization )
 add_my_test(HierarchicalMultiPatchAmr_test)
@@ -124,3 +133,6 @@ add_test(
 set_tests_properties( python_refinement_policy_smoke_test PROPERTIES
     ENVIRONMENT PYTHONPATH=${CMAKE_BINARY_DIR}/src/api
     SKIP_RETURN_CODE 77 )
+
+add_test( NAME python_thb_benchmark_runner_test
+    COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/ThbActivityBenchmarkRunner_test.py )
