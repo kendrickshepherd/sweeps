@@ -3,6 +3,27 @@
 These are the equivalence gates and repeatable baseline for optimization C.
 They do **not** implement the leaf-local activity algorithm.
 
+## Build environment
+
+Build, test and measure in the environment that configured `build/`. The
+configured compiler may be a wrapper such as `mpic++`, whose backend comes
+from the environment (`OMPI_CXX`, `PATH`). From a different shell, a rebuild
+can silently use another compiler for the changed libraries. For example, on
+the macOS setup used for these baselines, prefix commands with:
+
+```sh
+env -u CC -u CXX PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \
+    OMPI_CC=/usr/bin/clang OMPI_CXX=/usr/bin/clang++ <command>
+```
+
+The runner checks compiler family and version before building; it does not
+verify the entire build environment. It asks the configured compiler for its
+identity in the current environment and refuses if that differs from what
+CMake recorded at configure time. It does not verify SDK consistency or how
+existing object files were compiled. Plain `cmake --build` and `ctest`
+commands do not check.
+
 ## Routine correctness tests
 
 ```sh
@@ -36,9 +57,10 @@ re-derive merging or orientation signs.
 
 Use an already configured **Release** build with its existing dependencies.
 The runner builds the native target through CMake before measuring, so it
-uses the project's configured compiler and rebuilds changed dependencies.
-It refuses a build directory configured from another source checkout, and
-rejects sources that change during the build or measurements.
+rebuilds changed dependencies. Run it in the configure environment (see
+above). It refuses a different compiler identity, a build directory
+configured from another source checkout, and sources that change during the
+build or measurements.
 It needs only Python's standard library, not NumPy or StokesFlow.
 
 ```sh
@@ -96,8 +118,9 @@ The report includes:
 - Peak RSS immediately after construction and after checks. macOS reports
   bytes; Linux's KiB is normalized to bytes. Unsupported systems report
   null. Peak RSS is **not retained allocation or current resident memory**.
-- Actual compiler version from the binary, configured compiler path/flags,
-  platform, commit and dirty state, timestamps, and source/artifact SHA-256.
+- Actual compiler version from the binary, the verified configured compiler
+  identity, configured compiler path/flags, platform, commit and dirty state,
+  timestamps, and source/artifact SHA-256.
 
 Dirty trees are permitted for development and explicitly labelled. For a
 shareable before/after baseline, commit each tree and retain the reports

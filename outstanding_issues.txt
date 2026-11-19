@@ -2780,8 +2780,9 @@ MEDIUM PRIORITY — Architectural / Correctness
              decide whether any needs work before the loop relies on it.
              [FIRST HALF DONE 2026-11-17, measurement only.  B1 and B2
              committed b99440c.  C reference tests and opt-in benchmark
-             verified, awaiting review; optimization not started.
-             STEP 10.7 below.]
+             committed 0e8a7d9.  C design agreed 2026-11-18; build-
+             environment guard in the working tree; increment 1 not
+             started.  STEP 10.7 below.]
        10.8  StokesFlow-side integration test, in that repository and
              committed there: estimate, mark, grade, close, construct in
              Sweeps, validate P_n, every cycle.  Single patch first;
@@ -4163,8 +4164,8 @@ MEDIUM PRIORITY — Architectural / Correctness
 
      STEP 10.7, C REFERENCE TESTS AND BENCHMARK (2026-11-17).
        Preparation only.  No production optimization or new topology
-       query; B3 and D are not part of this change.  Nothing staged or
-       committed.  The src tree matches b99440c after the probes below.
+       query; B3 and D are not part of this change.  Committed
+       0e8a7d9.  The src tree matches b99440c after the probes below.
      Reference and comparison.
        test/support/ThbActivityReference.hpp freezes the full-domain
        levelActiveFunctions algorithm from b99440c.  It does not include
@@ -4282,6 +4283,87 @@ MEDIUM PRIORITY — Architectural / Correctness
        The full 0-7 sweep remains available on demand; not run here.
        Reports and logs:
          /private/tmp/sweeps-c-reference.b8q2U5.
+     STEP 10.7, C DESIGN AGREED; BUILD-ENVIRONMENT GUARD (2026-11-18).
+     C contract.
+       C changes how activity is computed, not which functions are
+       active.  A level-l candidate is a function on a level-l leaf, as
+       today.  It is kept iff every cell of its level-space support lies
+       in Omega^l; for a shared multipatch function that includes every
+       patch-local representative.  Support is the element incidence of
+       the existing level-space connectivity: no numerical support
+       detection, no reinterpretation of cancellation between signed
+       representatives.  Ids, ordering, orientation flags, truncation,
+       leaves and public query results are unchanged.  No grading,
+       closure, policy enforcement or cross-interface propagation.
+     Design.
+       Region query: an immutable workspace of the existing leaves as
+       (patch, level, tensor cell indices).  A level-l cell is outside
+       Omega^l iff a coarser ancestor is a leaf.  Ancestors come from
+       the cell's tensor indices divided by the patch's stored
+       refinementRatios(), at every coarser level.  Not dart ancestry:
+       iterateDartLineage gives interior darts no ancestor
+       (checkForNoAncestor).  iterateChildren uses the same ratios, so
+       the query matches the frozen reference's covered set.
+       Local support: per distinct 1d B-spline space, one pass over the
+       compressed knots gives each function's range of nonzero spans.
+       Tensor support is the product of ranges, enumerated on demand
+       with an early exit.  Repeated knots, reduced degrees and degree
+       zero handled explicitly.  No KnotVector::knot() in candidate
+       loops (it scans the knot data).  Tables live in the activity
+       workspace; BSplineSpace1d's layout is unchanged.
+       Multipatch incidence: scan each (patch, local id) entry of the
+       existing level function-id map; if its global id is still a
+       candidate, test that local support and drop the candidate at its
+       first failure.  Complete by construction (transitive junctions,
+       vector components, same-patch representatives).  No reverse map
+       and no new merge bookkeeping.  It is an extra full-map pass per
+       level unless the callers' existing loops absorb it, so multipatch
+       activity is not fully leaf-local.  Measure that tradeoff.
+       Keep std::set<FunctionId>; add a workspace argument, whose
+       construction gets its own wiring and tests.
+       Hierarchical self-gluing: characterize what is admitted today.
+       Neither add support nor add a rejection to accommodate C.
+     Admissibility.
+       Not a prerequisite for C: the leaves determine activity.  No
+       user-defined search window.  No search cutoff is established for
+       this multipatch/vector implementation (Buffa et al.: Def. 4 is
+       post-truncation overlap, Def. 6 a stronger support-extension
+       condition), so the exact search is required.  That the level
+       walk is cheap is a prediction until profiled.  Enforcing
+       admissibility is a separate validator task, not part of C.
+     Order.
+       1. Build-environment guard (below).
+       2. User commits it; capture the clean depth-7 baseline.
+       3. Increment 1: region and local-support queries with tests;
+          production activity unchanged.  Review.
+       4. Increment 2: switch the three callers using the map scan.
+          Fault injections: region membership, support endpoints, remote
+          representatives, each caller's wiring.  L-shaped four-patch
+          fixture, diagonal patch coarse: the chosen H1 junction
+          function occurs on a refined leaf, has a representative on the
+          corner-only coarse patch, passes on the refined patches, and
+          so is rejected only by that representative.  Full suite, then
+          measurement on the same environment, fixtures and repeats.
+     Build-environment guard, MEASURED.
+       run_thb_activity.py refuses to build when the configured
+       compiler, run in the current environment, reports an identity
+       different from CMake's record (CMakeFiles/<cmake version>/
+       CMakeCXXCompiler.cmake).  Identity is read from predefined
+       macros in CMake's naming (AppleClang, Clang, GNU) and recorded
+       as provenance.compiler_identity.  README gains a build-environment
+       section; plain cmake --build and ctest do not check.
+       Normal shell: mpic++ resolves to Clang 12.0.0 and the runner exits
+       1 before building, naming both identities.  Configure environment:
+       AppleClang 17.0.0.17000013, matching the cache; --quick passes all
+       8 processes, binary compiler clang 17.0.0 (clang-1700.0.13.5).
+       Runner unit tests 11 -> 16, passing under Python 3.8 and 3.11 and
+       through ctest.  The check covers compiler family and version only,
+       not SDK consistency or how existing objects were compiled.
+       clean_build.sh and clean_build_timestamped.sh are personal helpers,
+       excluded locally by root-anchored entries in .git/info/exclude;
+       no tracked file references them.  dirty: false means git sees no
+       changes, not that every filesystem input is tracked.  Never
+       exclude benchmark inputs to obtain that label.
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces

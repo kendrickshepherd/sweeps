@@ -4,7 +4,9 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import platform
+import re
 from pathlib import Path
 import statistics
 import subprocess
@@ -73,7 +75,8 @@ def artifact_hashes(build, binary):
 
 def cache_values(build):
     wanted = {"CMAKE_BUILD_TYPE", "CMAKE_CXX_COMPILER", "CMAKE_CXX_FLAGS", "CMAKE_CXX_FLAGS_RELEASE",
-              "CMAKE_OSX_ARCHITECTURES", "CMAKE_OSX_SYSROOT", "CMAKE_GENERATOR", "CMAKE_HOME_DIRECTORY"}
+              "CMAKE_OSX_ARCHITECTURES", "CMAKE_OSX_SYSROOT", "CMAKE_GENERATOR", "CMAKE_HOME_DIRECTORY",
+              "CMAKE_CACHE_MAJOR_VERSION", "CMAKE_CACHE_MINOR_VERSION", "CMAKE_CACHE_PATCH_VERSION"}
     values = {}
     for line in (build / "CMakeCache.txt").read_text().splitlines():
         if line.startswith(("#", "//")) or "=" not in line or ":" not in line.split("=", 1)[0]:
@@ -90,6 +93,55 @@ def require_compatible_build(cache):
         raise ValueError("Build directory belongs to a different source checkout")
     if cache.get("CMAKE_BUILD_TYPE") != "Release":
         raise ValueError("Use a configured Release build; this runner does not change compiler settings")
+
+
+def macro_identity(macros):
+    """CMake's compiler ID and version from predefined macros; None if unrecognized."""
+    def version(*names):
+        return ".".join(macros[name] for name in names) if all(name in macros for name in names) else None
+    if "__apple_build_version__" in macros:
+        found = version("__clang_major__", "__clang_minor__", "__clang_patchlevel__", "__apple_build_version__")
+        return ("AppleClang", found) if found else None
+    if "__clang__" in macros:
+        found = version("__clang_major__", "__clang_minor__", "__clang_patchlevel__")
+        return ("Clang", found) if found else None
+    if "__GNUC__" in macros:
+        found = version("__GNUC__", "__GNUC_MINOR__", "__GNUC_PATCHLEVEL__")
+        return ("GNU", found) if found else None
+    return None
+
+
+def environment_identity(compiler):
+    """Identity of the compiler a build in this environment would run (wrappers resolve their backend here)."""
+    output = subprocess.run([compiler, "-dM", "-E", "-x", "c++", os.devnull], check=True, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+    macros = dict(re.findall(r"^#define (\w+) (.*)$", output, re.MULTILINE))
+    return macro_identity(macros)
+
+
+def configured_identity(build, cache):
+    version = ".".join(cache.get("CMAKE_CACHE_" + part + "_VERSION", "") for part in ("MAJOR", "MINOR", "PATCH"))
+    path = build / "CMakeFiles" / version / "CMakeCXXCompiler.cmake"
+    if not path.is_file():
+        raise ValueError("Cannot find the configured compiler identity: " + str(path))
+    found = dict(re.findall(r'^set\(CMAKE_CXX_COMPILER_(ID|VERSION) "([^"]*)"\)$', path.read_text(), re.MULTILINE))
+    if not found.get("ID") or not found.get("VERSION"):
+        raise ValueError("Incomplete configured compiler identity: " + str(path))
+    return found["ID"], found["VERSION"]
+
+
+def require_configured_compiler(build, cache):
+    """Refuse to build when this environment's compiler differs from the one CMake configured."""
+    configured = configured_identity(build, cache)
+    compiler = cache.get("CMAKE_CXX_COMPILER")
+    if not compiler:
+        raise ValueError("The build cache names no C++ compiler")
+    current = environment_identity(compiler)
+    if current != configured:
+        raise ValueError("In this environment {} is {}, but the build was configured with {} {}; "
+                         "run in the configure environment (benchmarks/README.md)".format(
+                             compiler, " ".join(current) if current else "an unrecognized compiler", *configured))
+    return {"id": configured[0], "version": configured[1]}
 
 
 def git_output(*args):
@@ -117,6 +169,7 @@ def main(argv=None):
     build = args.build_dir.resolve()
     cache = cache_values(build)
     require_compatible_build(cache)
+    compiler_identity = require_configured_compiler(build, cache)
     source_before = input_hashes()
     status_before, commit_before = git_output("status", "--porcelain"), git_output("rev-parse", "HEAD")
     subprocess.run(["cmake", "--build", str(build), "--target", "thb_activity_benchmark",
@@ -135,7 +188,7 @@ def main(argv=None):
     provenance = {"utc_started": datetime.now(timezone.utc).isoformat(), "git_commit": commit_before,
                   "git_status": status_before.splitlines(), "dirty": bool(status_before),
                   "platform": platform.platform(), "machine": platform.machine(), "python": sys.version,
-                  "cmake_cache": cache, "sources_sha256": source_before,
+                  "cmake_cache": cache, "compiler_identity": compiler_identity, "sources_sha256": source_before,
                   "artifacts_sha256": artifacts_before}
     records, summaries = [], []
     for fixture in fixtures:
