@@ -60,6 +60,7 @@ add_my_test(HierarchicalTPCMap_test)
 add_my_test(HierarchicalTPPAtlas_test)
 add_my_test(HierarchicalTPSplineSpace_test)
 add_my_test(ThbActivityReference_test)
+add_my_test(ThbActivityQueries_test)
 
 # Explicitly built and run on demand, never registered with ctest or included in the default build.
 add_executable( thb_activity_benchmark EXCLUDE_FROM_ALL ../benchmarks/ThbActivity_benchmark.cpp )

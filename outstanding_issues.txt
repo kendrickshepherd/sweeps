@@ -2781,8 +2781,9 @@ MEDIUM PRIORITY — Architectural / Correctness
              [FIRST HALF DONE 2026-11-17, measurement only.  B1 and B2
              committed b99440c.  C reference tests and opt-in benchmark
              committed 0e8a7d9.  C design agreed 2026-11-18; build-
-             environment guard in the working tree; increment 1 not
-             started.  STEP 10.7 below.]
+             environment guard committed f77d987; clean depth-7 run
+             captured (timings not a reference, see below); increment 1
+             in the working tree, awaiting review.  STEP 10.7 below.]
        10.8  StokesFlow-side integration test, in that repository and
              committed there: estimate, mark, grade, close, construct in
              Sweeps, validate P_n, every cycle.  Single patch first;
@@ -4364,6 +4365,151 @@ MEDIUM PRIORITY — Architectural / Correctness
        no tracked file references them.  dirty: false means git sees no
        changes, not that every filesystem input is tracked.  Never
        exclude benchmark inputs to obtain that label.
+     Clean depth-7 run, MEASURED (2026-11-18).
+       f77d987, dirty false, git_status empty, compiler_identity
+       AppleClang 17.0.0.17000013; F1 F1n F1w F2 at depth 7, three
+       processes each; exit 0.  Every repeat's leaves, function counts,
+       extraction nonzeros, compared levels and fingerprint equal
+       depth7-final.json (b99440c).  Every artifact SHA-256, the
+       benchmark binary included, equals that report's.
+       Timings are NOT a before-C reference.  Constructor medians 8.75 /
+       6.42 / 9.80 / 21.10 s against 5.29 / 3.83 / 5.84 / 13.04 s; every
+       median timing is 1.62-1.76 times the earlier one.  The machine was
+       on battery with Low Power Mode on and FortiClient epctrl at about
+       99% of one core; the earlier power state was not recorded.  Same
+       binaries, so machine state, not code.  The runner does not record
+       power state.  Before C's measurement, re-measure f77d987 on AC
+       power with Low Power Mode off, and measure before and after in
+       one session and power state.
+       Report and log: depth7-clean.json and depth7-clean.log in
+         /private/tmp/claude-501/-Users-kendrickshepherd-code-sweeps-
+         sweeps/8448b509-a824-4fbf-b1e1-732f235efcca/scratchpad/
+         c_baseline.
+     STEP 10.7, C INCREMENT 1 (2026-11-18): region and local-support
+     queries with tests.  Nothing in production includes them; activity
+     is unchanged.  In the working tree, awaiting review.
+     Files.
+       src/topology/ThbLevelDomains.hpp and src/basis/ThbLocalSupport.hpp,
+       header-only, namespace detail.  test/ThbActivityQueries_test.cpp,
+       [thb_queries], 7 cases; registered in test/CMakeLists.txt.
+     Region, as implemented.
+       LevelDomains keeps, per patch, the level-0 tensor lengths, the
+       stored refinementRatios() and each level's leaves as sorted linear
+       indices (axis 0 fastest).  contains(patch, level, cell) divides
+       the cell's indices by each coarser transition's ratio in turn and
+       binary-searches that level's leaves; a hit means outside
+       Omega^level.  One search per coarser level.  Leaves are trusted to
+       partition each patch, as the cmaps guarantee; not rechecked.
+       Factories take leafElements() output, as levelActiveFunctions
+       receives it: TP leaves through unflattenFull dart ids, multipatch
+       leaves through toLocalDart, then the patch's constituent.
+       invalid_argument: no patch, dimension 0 or mixed, a zero length or
+       ratio, a leaf outside its patch's levels or cells, a wrong leaf-
+       list count, a leaf that is not top-dimensional.  out_of_range: a
+       query outside the hierarchy.
+     Local support, as implemented.
+       SupportRanges1d: one pass over the compressed multiplicities
+       (uniqueKnotMultiplicities()) materializes u, an O(number of knots)
+       table of the unique-knot index of each full knot k.  Function i
+       spans unique-knot intervals [u(i), u(i+p+1)).  No knot() call.
+       logic_error if the knot intervals differ from the 1d cmap's
+       element count.
+       TensorSupport: the product of the components' ranges, the function
+       id unflattened axis 0 fastest.  iterateCellsWhile enumerates axis 0
+       fastest and returns false iff the callback stopped it.  1d tables
+       are shared through a cache keyed by component space.
+       invalid_argument for a source that is not a tensor product of
+       BSplineSpace1d; out_of_range for an id outside the space, negative
+       ids included.
+     Oracles, independent of the new headers.
+       1d: BSplineSpace1d::connectivity inverted over elements, as exact
+       sets, each nonempty.  Tensor: tensorCellSupports, set equality, no
+       duplicate cell, count = product of range lengths.  Region: the
+       iterateChildren-covered set, built as levelActiveFunctions builds
+       it, cells located by the test's own unflattenFull copy.  Every cell
+       of every patch and level is compared; lengths are checked against
+       the fixture's knot vectors.
+     Fixtures.
+       1d: three hand cases; degrees 0-3 x interior multiplicity 1..p+1 on
+       nonuniform knots (10 cases).  Single patch: 2d and 3d x degrees 1-3
+       x marks none, uniform, random x c0, ratios {2,1},{1,3} (3d
+       {2,1,1},{1,3,1}); jump marks on cells {2,1}; jump marks on square
+       dyadic levels.  Spaces: H1, reduced L2, H(div) and H(curl) scalar
+       levels.  Multipatch: two patches x 2d, 3d x reverse x seeds 17,
+       1729 (3d reverse uses ZeroToOne, so patch 1's ratios are
+       permuted); four-patch diagonal; every level's patch subspaces,
+       scalar and vector.  Hand region: two patches, two transitions,
+       unsorted leaves, 14 queries.  Iteration order and every early-exit
+       point of one function.  Every guard.  Self-gluing, below.
+     Counters, MEASURED.  Single patch: 840 spaces, 57377 functions,
+       1004 outside cells, 656 deep (outside, but not covered from the
+       parent level).  Multipatch: 448 / 16376 / 256 / 120.  223
+       assertions in 7 cases.
+     Self-gluing, characterized only.  Patch 0's side 0 glued to its side
+       1, both directions.  Per level (local entries, globals, globals
+       with two same-patch representatives):
+         2d Flip1d, cells {2,2}: 16/12/4, 36/30/6, 100/90/10; H1 54,
+         H(div) 111, L2 55.
+         3d ZeroToZero..ZeroToThree, cells {2,1,1}, ratios {2,2,2} x2:
+         36/27/9, 96/80/16, 360/324/36; H1 221/224/221/224, H(div)
+         556/559/556/559, L2 169.
+       No global has more than two representatives.  Activity equals the
+       frozen reference on all 12 levels (H1, H(div), H(curl), L2) and
+       the region equals its oracle.  Increment 2's map scan must test
+       both same-patch representatives of such a function.
+     Predictions, written before each run.  P1-P9 held.  Every mutant
+       was caught as predicted; the details deviated.  Extra catches: M2
+       the p=2 hand case (double knot); M3 patch 1 L2 (0,0) and the 2d
+       self-glue region; M9 (0,2,(2,5)); M8 the guards, 3d self-glue.
+       Fewer: M2 misses c0 at degree 1, whose C0 knots are simple.  M8
+       was caught through bounds, not membership (below).  P1 shows the
+       knot formula equals the connectivity contract on the tested
+       spaces, no more.
+     Sensitivity mutations, MEASURED.  Ten mutated header copies and an
+       unmodified control, each compiled into the test.  The control
+       passes; every mutant fails.  Failing cases, after hardening:
+         M1  range end i+p               1d, single, multi, iteration
+         M2  simple-knot ranges          1d; c0 at degrees 2 and 3 only
+         M3  parent-level walk only      single, multi, hand, 2d self-glue
+         M4  finest ratio at every step  single, multi, hand (0,2,(1,1))
+         M5  unflatten last axis fastest single, multi, iteration
+         M6  stop request ignored        early exit only
+         M7  multipatch leaves on patch 0  multipatch only
+         M8  tensor axes reversed        single, multi, guards, self-glue
+         M9  leaves left unsorted        hand (0,2,(0,3)) and (0,2,(2,5))
+         M10 patch 0's ratios everywhere 3d reversed multipatch only
+       Hand checks before the runs closed two blind spots: the hand
+       example's leaves were already in order (M9 invisible), and no
+       level-2 query depended on which transition's ratio was used (M4).
+       The first mutant run found a third: M8 failed only at the leaf-
+       bounds guard on non-square levels.  Every square fixture was
+       symmetric under the reversal, so on a square dyadic hierarchy (the
+       benchmark's shape) the region would be transposed silently.  The
+       square jump fixture now fails membership under M8.  M10 is caught
+       by bounds alone, inherently: a wrong ratio changes some level's
+       lengths.  M4 cannot show where all transitions share one ratio.
+     Full suite: ctest 295/295.  Two production headers were added; no
+       existing production caller or activity behavior was changed.
+     Open for increment 2.
+       The vector map's local indexing.  Same-patch representatives
+       (above).  F1n as a wiring regression (below).  Timings:
+       re-measure f77d987 on AC power with Low Power Mode off, then
+       measure before and after in one session and power state.
+       Scripts, predictions and mutant logs: c_inc1 in the scratchpad
+       directory named above.
+     NURBS spaces, closed by code reading (2026-11-20).  F1n's
+       NURBSNavierStokesHierarchicalDiscretization delegates to the
+       polynomial base constructor: H1 from buildHierarchicalH1
+       (buildBSpline levels), H(div) from buildHDIV on that H1, L2 from
+       buildL2 (BSplineSpace1d sources).  Only Geometry is rational
+       (NURBSSpaceEvaluator).  So TensorSupport receives B-spline
+       components.  Increment 2 still runs F1n, as a wiring regression.
+     Review (2026-11-20): design and implementation accepted.
+       Closeouts: lines over 120 columns wrapped (four in
+       ThbLevelDomains.hpp, one in ThbLocalSupport.hpp, two in the test);
+       explicit SmallVector.hpp include in both headers; the wording on
+       production changes, the NURBS question and the support-table
+       description corrected above.
 
 
 2. Per-Element DOF Alignment at Flipped Multi-Element Patch Interfaces
